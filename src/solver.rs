@@ -194,7 +194,7 @@ impl Solver {
 
     fn check_satisfiability(&mut self) -> Solution {
         let mut acc = Value::True;
-        for (i, clause) in self.clauses.iter().enumerate() {
+        for clause in self.clauses.iter() {
             match self.eval_clause(clause) {
                 Value::False => {
                     return Solution::UnSat;
