@@ -230,10 +230,10 @@ impl Solver {
                         for position in 0..self.geometry.positions {
                             let indices = (position, depth, key);
                             let key_lit = self.key_vars[&indices];
-                            if self.solver.value(&key_lit) == Value::True {
-                                print!("{} ", depth);
-                            } else {
-                                print!(". ");
+                            match self.solver.value(&key_lit) {
+                                Value::True => print!("{} ", depth),
+                                Value::Unknown => print!("x "),
+                                Value::False => print!(". "),
                             }
                         }
                         println!();

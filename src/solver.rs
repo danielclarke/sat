@@ -1,11 +1,5 @@
 use std::ops::Not;
 
-enum Decision {
-    UnitClause,
-    PureLiteral { negated: bool },
-    SmallestClause,
-}
-
 struct Stack<T> {
     top: usize,
     stack: Vec<Option<T>>,
@@ -145,11 +139,33 @@ impl Not for Literal {
 
 type Clause = Vec<Literal>;
 
+#[derive(Copy, Clone)]
+struct VariableAssignment {
+    handle: usize,
+    index: usize,
+    values: [Value; 2],
+}
+
+impl VariableAssignment {
+    fn new(handle: usize, negated: bool) -> Self {
+        let values = if negated {
+            [Value::False, Value::True]
+        } else {
+            [Value::True, Value::False]
+        };
+        Self {
+            handle,
+            index: 0,
+            values,
+        }
+    }
+}
+
 pub struct Solver {
     variables: Vec<Variable>,
     variable_clauses: Vec<Vec<usize>>,
     values: Vec<Value>,
-    var_search_stack: Stack<usize>,
+    var_search_stack: Stack<VariableAssignment>,
     clauses: Vec<Clause>,
     clause_values: Vec<Value>,
     clause_truth_variables: Vec<Option<usize>>,
@@ -186,18 +202,27 @@ impl Solver {
         self.values[variable.handle]
     }
 
-    fn next_unassigned(&self) -> Option<usize> {
+    fn next_unassigned(&self) -> Option<VariableAssignment> {
+        // unassigned variable search order:
+        //   1. unit clause
+        //   2. pure literal
+        //   3. smallest clause
+
         let (mut handle, mut min_clause_length) = (None, None);
         for (c, &clause_length) in self.clause_lengths.iter().enumerate() {
             // unit clause propagation
             if clause_length == 1 {
                 for literal in &self.clauses[c] {
                     if literal.value(self.values[literal.variable.handle]) == Value::Unknown {
-                        return Some(literal.variable.handle);
+                        return Some(VariableAssignment::new(
+                            literal.variable.handle,
+                            literal.negated,
+                        ));
                     }
                 }
             }
 
+            // cache the smallest clause encountered
             match (handle, min_clause_length) {
                 (None, None) => {
                     for literal in &self.clauses[c] {
@@ -228,15 +253,15 @@ impl Solver {
         for (v, clauses) in self.variable_clauses.iter().enumerate() {
             'next_variable: {
                 if self.values[v] == Value::Unknown {
-                    let mut purity = None;
+                    let mut negated = None;
                     for &clause in clauses.iter() {
                         if self.clause_values[clause] == Value::Unknown {
                             for literal in self.clauses[clause].iter() {
                                 if literal.variable.handle == v {
-                                    match purity {
-                                        None => purity = Some(literal.negated),
-                                        Some(p) => {
-                                            if p == literal.negated {
+                                    match negated {
+                                        None => negated = Some(literal.negated),
+                                        Some(negated) => {
+                                            if negated == literal.negated {
                                                 continue;
                                             } else {
                                                 break 'next_variable;
@@ -247,12 +272,16 @@ impl Solver {
                             }
                         }
                     }
-                    return Some(v);
-                }
-            };
+                    match negated {
+                        None => (),
+                        Some(negated) => return Some(VariableAssignment::new(v, negated)),
+                    }
+                };
+            }
         }
 
-        handle
+        // smallest clause
+        handle.map(|handle| VariableAssignment::new(handle, false))
     }
 
     fn clause_length(&self, clause: &Clause) -> usize {
@@ -290,7 +319,7 @@ impl Solver {
 
     fn check_satisfiability(&mut self) -> Solution {
         if let Some(&v) = self.var_search_stack.last() {
-            for &c in self.variable_clauses[v].iter() {
+            for &c in self.variable_clauses[v.handle].iter() {
                 if self.clause_values[c] == Value::Unknown {
                     match self.eval_clause(&self.clauses[c]) {
                         Value::False => {
@@ -301,7 +330,7 @@ impl Solver {
                         }
                         Value::True => {
                             self.clause_values[c] = Value::True;
-                            self.clause_truth_variables[c] = Some(v);
+                            self.clause_truth_variables[c] = Some(v.handle);
                             self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
                         }
                     }
@@ -345,11 +374,11 @@ impl Solver {
         let unassigned = if let Some(var) = self.next_unassigned() {
             var
         } else {
+            println!("All variables assigned!");
             return Solution::Sat;
         };
 
-        // naively try true first, then false, then backtrack
-        self.values[unassigned] = Value::True;
+        self.values[unassigned.handle] = unassigned.values[0];
         self.var_search_stack.push(unassigned);
 
         let mut i = 0;
@@ -370,77 +399,58 @@ impl Solver {
                 );
             }
             match self.check_satisfiability() {
-                Solution::Sat => return Solution::Sat,
+                Solution::Sat => {
+                    println!("All clauses satisfied!");
+                    return Solution::Sat;
+                }
                 Solution::UnSat => {
-                    let mut value_index = if let Some(&value_index) = self.var_search_stack.last() {
-                        value_index
-                    } else {
-                        // all variables exhausted
-                        return Solution::UnSat;
+                    let variable_assignment = 'backtrack: loop {
+                        let variable_assignment =
+                            if let Some(variable_assignment) = self.var_search_stack.pop() {
+                                variable_assignment
+                            } else {
+                                // all variables exhausted
+                                return Solution::UnSat;
+                            };
+
+                        self.values[variable_assignment.handle] = Value::Unknown;
+
+                        // undo clause length changes from trying this assignment
+                        for v in self.clause_truth_variables.iter() {
+                            if *v == Some(variable_assignment.handle) {
+                                for &c in self.variable_clauses[variable_assignment.handle].iter() {
+                                    self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
+                                }
+                            }
+                        }
+
+                        // undo clause value changes from trying this assignment
+                        for (i, v) in self.clause_truth_variables.iter_mut().enumerate() {
+                            if *v == Some(variable_assignment.handle) {
+                                self.clause_values[i] = Value::Unknown;
+                                *v = None;
+                            }
+                        }
+
+                        if variable_assignment.index == 0 {
+                            break 'backtrack variable_assignment;
+                        }
                     };
 
-                    // undo clause length changes from trying this assignment
-                    for v in self.clause_truth_variables.iter() {
-                        if *v == Some(value_index) {
-                            for &c in self.variable_clauses[value_index].iter() {
-                                self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
-                            }
-                        }
-                    }
-
-                    // undo clause value changes from trying this assignment
-                    for (i, v) in self.clause_truth_variables.iter_mut().enumerate() {
-                        if *v == Some(value_index) {
-                            self.clause_values[i] = Value::Unknown;
-                            *v = None;
-                        }
-                    }
-
-                    let mut value = self.values[value_index];
-                    match value {
-                        Value::True => self.values[value_index] = Value::False,
-                        Value::False => {
-                            // backtrack, undo assignments until reaching a variable assigned true
-                            while value == Value::False {
-                                self.values[value_index] = Value::Unknown;
-                                self.var_search_stack.pop();
-                                value_index =
-                                    if let Some(&value_index) = self.var_search_stack.last() {
-                                        value_index
-                                    } else {
-                                        return Solution::UnSat;
-                                    };
-
-                                for v in self.clause_truth_variables.iter() {
-                                    if *v == Some(value_index) {
-                                        for &c in self.variable_clauses[value_index].iter() {
-                                            self.clause_lengths[c] =
-                                                self.clause_length(&self.clauses[c]);
-                                        }
-                                    }
-                                }
-
-                                for (i, v) in self.clause_truth_variables.iter_mut().enumerate() {
-                                    if *v == Some(value_index) {
-                                        self.clause_values[i] = Value::Unknown;
-                                        *v = None;
-                                    }
-                                }
-
-                                value = self.values[value_index];
-                            }
-                            // try the other truth value
-                            self.values[value_index] = Value::False;
-                        }
-                        Value::Unknown => unreachable!(),
-                    }
+                    // reached a variable with a remaining assignment, try the other truth value
+                    self.values[variable_assignment.handle] = variable_assignment.values[1];
+                    // push it back onto the top of the stack
+                    self.var_search_stack.push(VariableAssignment {
+                        index: 1,
+                        ..variable_assignment
+                    });
                 }
                 Solution::Unknown => {
                     if let Some(var) = self.next_unassigned() {
-                        self.values[var] = Value::True;
+                        self.values[var.handle] = var.values[0];
                         self.var_search_stack.push(var);
                     } else {
-                        return Solution::Sat;
+                        unreachable!("No next unassigned variable, yet unknown clauses!");
                     };
                 }
             }

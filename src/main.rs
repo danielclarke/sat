@@ -1,24 +1,46 @@
 extern crate minisat;
 
+use std::fs::File;
+use std::io::{self, BufRead};
+use std::path::Path;
+
 mod master_key;
 mod master_key_2;
 mod solver;
 mod sudoku;
 mod sudoku_2;
 
+fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(filename)?;
+    Ok(io::BufReader::new(file).lines())
+}
+
 fn main() {
-    let s = String::from(
-        "52...6.........7.13...........4..8..6......5...........418.........3..2...87.....",
-    );
-    let b = sudoku_2::Board::from_string(s);
-    println!("{}", b);
+    let lines = if let Ok(lines) = read_lines("data/sudoku/95_hard_sudokus.txt") {
+        lines
+    } else {
+        return;
+    };
+    for (i, sudoku) in lines.enumerate() {
+        match sudoku {
+            Ok(sudoku) => {
+                let board = sudoku_2::Board::from_string(sudoku);
+                println!("Sudoku: {}", i);
+                println!("{}", board);
 
-    let mut s = sudoku_2::Solver::new(b);
-    if let Some(solution) = s.solve() {
-        print!("{}", solution);
+                let mut solver = sudoku_2::Solver::new(board);
+                if let Some(solution) = solver.solve() {
+                    print!("{}", solution);
+                }
+
+                println!();
+            }
+            Err(e) => println!("Error reading sudoku: {}", e),
+        }
     }
-
-    println!();
 
     let lock_sheet = master_key_2::LockSheet::load("data/mk2/lock_sheet.txt").expect("Error:");
     println!("{}", lock_sheet);
@@ -27,10 +49,10 @@ fn main() {
     let mut solver = master_key_2::Solver::new(geometry, lock_sheet);
     solver.solve();
 
-    // let lock_sheet = master_key::LockSheet::load("data/mk0/lock_sheet.txt").expect("Error:");
-    // println!("{}", lock_sheet);
-    // let geometry = master_key::Geometry::load("data/mk0/geometry.txt").expect("Error:");
-    // println!("{}", geometry);
-    // let mut solver = master_key::Solver::new(geometry, lock_sheet);
-    // solver.solve();
+    let lock_sheet = master_key_2::LockSheet::load("data/mk1/lock_sheet.txt").expect("Error:");
+    println!("{}", lock_sheet);
+    let geometry = master_key_2::Geometry::load("data/mk1/geometry.txt").expect("Error:");
+    println!("{}", geometry);
+    let mut solver = master_key_2::Solver::new(geometry, lock_sheet);
+    solver.solve();
 }

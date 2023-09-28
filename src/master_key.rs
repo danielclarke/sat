@@ -220,6 +220,12 @@ impl Solver {
             self.add_gecodes(key);
         }
 
+        println!(
+            "Solving for {} variables with {} clauses",
+            self.solver.num_vars(),
+            self.solver.num_clauses()
+        );
+
         if let Ok(solution) = self.solver.solve() {
             println!("SOLVED!");
 

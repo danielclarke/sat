@@ -21,7 +21,7 @@ impl Board {
     pub fn from_string(s: String) -> Board {
         let mut board = vec![vec![None; COLUMNS]; ROWS];
         for (i, c) in s.chars().enumerate() {
-            board[i / ROWS][i % COLUMNS] = c.to_digit(10);
+            board[i / ROWS][i % COLUMNS] = c.to_digit(10).map(|d| d - 1);
         }
         Board { board }
     }
