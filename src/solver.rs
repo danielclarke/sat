@@ -415,20 +415,13 @@ impl Solver {
 
                         self.values[variable_assignment.handle] = Value::Unknown;
 
-                        // undo clause length changes from trying this assignment
-                        for v in self.clause_truth_variables.iter() {
-                            if *v == Some(variable_assignment.handle) {
-                                for &c in self.variable_clauses[variable_assignment.handle].iter() {
-                                    self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
-                                }
-                            }
-                        }
-
-                        // undo clause value changes from trying this assignment
-                        for (i, v) in self.clause_truth_variables.iter_mut().enumerate() {
-                            if *v == Some(variable_assignment.handle) {
-                                self.clause_values[i] = Value::Unknown;
-                                *v = None;
+                        for &c in self.variable_clauses[variable_assignment.handle].iter() {
+                            // undo clause length changes from trying this assignment
+                            self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
+                            if self.clause_truth_variables[c] == Some(variable_assignment.handle) {
+                                // undo clause value changes from trying this assignment
+                                self.clause_values[c] = Value::Unknown;
+                                self.clause_truth_variables[c] = None;
                             }
                         }
 
