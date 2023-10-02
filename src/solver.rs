@@ -138,6 +138,7 @@ impl Not for Literal {
 }
 
 type Clause = Vec<Literal>;
+type DecisionLevel = usize;
 
 #[derive(Copy, Clone)]
 struct VariableAssignment {
@@ -163,10 +164,11 @@ impl VariableAssignment {
 
 pub struct Solver {
     variables: Vec<Variable>,
-    variable_clauses: Vec<Vec<usize>>,
-    values: Vec<Value>,
-    var_search_stack: Stack<VariableAssignment>,
     clauses: Vec<Clause>,
+    variable_clauses: Vec<Vec<usize>>,
+    decisions: Stack<VariableAssignment>,
+    decision_levels: Stack<DecisionLevel>,
+    values: Vec<Value>,
     clause_values: Vec<Value>,
     clause_truth_variables: Vec<Option<usize>>,
     clause_lengths: Vec<usize>, // number of unassigned literals in the clause
@@ -178,7 +180,8 @@ impl Solver {
             variables: vec![],
             variable_clauses: vec![],
             values: vec![],
-            var_search_stack: Stack::new(),
+            decisions: Stack::new(),
+            decision_levels: Stack::new(),
             clauses: vec![],
             clause_values: vec![],
             clause_truth_variables: vec![],
@@ -202,7 +205,7 @@ impl Solver {
         self.values[variable.handle]
     }
 
-    fn next_unassigned(&self) -> Option<VariableAssignment> {
+    fn next_unassigned(&self) -> Option<(DecisionLevel, VariableAssignment)> {
         // unassigned variable search order:
         //   1. unit clause
         //   2. pure literal
@@ -214,9 +217,13 @@ impl Solver {
             if clause_length == 1 {
                 for literal in &self.clauses[c] {
                     if literal.value(self.values[literal.variable.handle]) == Value::Unknown {
-                        return Some(VariableAssignment::new(
-                            literal.variable.handle,
-                            literal.negated,
+                        let dl = self
+                            .decision_levels
+                            .last()
+                            .map_or(self.decision_levels.len(), |&dl| dl);
+                        return Some((
+                            dl,
+                            VariableAssignment::new(literal.variable.handle, literal.negated),
                         ));
                     }
                 }
@@ -274,14 +281,24 @@ impl Solver {
                     }
                     match negated {
                         None => (),
-                        Some(negated) => return Some(VariableAssignment::new(v, negated)),
+                        Some(negated) => {
+                            return Some((
+                                self.decision_levels.len(),
+                                VariableAssignment::new(v, negated),
+                            ))
+                        }
                     }
                 };
             }
         }
 
         // smallest clause
-        handle.map(|handle| VariableAssignment::new(handle, false))
+        handle.map(|handle| {
+            (
+                self.decision_levels.len(),
+                VariableAssignment::new(handle, false),
+            )
+        })
     }
 
     fn clause_length(&self, clause: &Clause) -> usize {
@@ -318,7 +335,7 @@ impl Solver {
     }
 
     fn check_satisfiability(&mut self) -> Solution {
-        if let Some(&v) = self.var_search_stack.last() {
+        if let Some(&v) = self.decisions.last() {
             for &c in self.variable_clauses[v.handle].iter() {
                 if self.clause_values[c] == Value::Unknown {
                     match self.eval_clause(&self.clauses[c]) {
@@ -369,17 +386,19 @@ impl Solver {
         self.clause_truth_variables = vec![None; self.clauses.len()];
         self.clause_lengths = self.clauses.iter().map(|c| c.len()).collect();
 
-        self.var_search_stack.reserve(self.variables.len());
+        self.decisions.reserve(self.variables.len());
+        self.decision_levels.reserve(self.variables.len());
 
-        let unassigned = if let Some(var) = self.next_unassigned() {
-            var
-        } else {
-            println!("All variables assigned!");
-            return Solution::Sat;
-        };
+        let (decision_level, unassigned) =
+            if let Some((decision_level, variable_assignment)) = self.next_unassigned() {
+                (decision_level, variable_assignment)
+            } else {
+                println!("All variables assigned!");
+                return Solution::Sat;
+            };
 
         self.values[unassigned.handle] = unassigned.values[0];
-        self.var_search_stack.push(unassigned);
+        self.decision_levels.push(0);
 
         let mut i = 0;
         loop {
@@ -387,7 +406,7 @@ impl Solver {
             if i % 100_000 == 0 {
                 println!(
                     "Vars: {} / {} Clauses: {} / {}",
-                    self.variables.len() - self.var_search_stack.len(),
+                    self.variables.len() - self.decisions.len(),
                     self.variables.len(),
                     self.clauses.len()
                         - self
@@ -406,7 +425,7 @@ impl Solver {
                 Solution::UnSat => {
                     let variable_assignment = 'backtrack: loop {
                         let variable_assignment =
-                            if let Some(variable_assignment) = self.var_search_stack.pop() {
+                            if let Some(variable_assignment) = self.decisions.pop() {
                                 variable_assignment
                             } else {
                                 // all variables exhausted
@@ -433,15 +452,15 @@ impl Solver {
                     // reached a variable with a remaining assignment, try the other truth value
                     self.values[variable_assignment.handle] = variable_assignment.values[1];
                     // push it back onto the top of the stack
-                    self.var_search_stack.push(VariableAssignment {
+                    self.decisions.push(VariableAssignment {
                         index: 1,
                         ..variable_assignment
                     });
                 }
                 Solution::Unknown => {
-                    if let Some(var) = self.next_unassigned() {
+                    if let Some((decision_level, var)) = self.next_unassigned() {
                         self.values[var.handle] = var.values[0];
-                        self.var_search_stack.push(var);
+                        self.decisions.push(var);
                     } else {
                         unreachable!("No next unassigned variable, yet unknown clauses!");
                     };
