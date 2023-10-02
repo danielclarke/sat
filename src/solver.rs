@@ -217,10 +217,7 @@ impl Solver {
             if clause_length == 1 {
                 for literal in &self.clauses[c] {
                     if literal.value(self.values[literal.variable.handle]) == Value::Unknown {
-                        let dl = self
-                            .decision_levels
-                            .last()
-                            .map_or(self.decision_levels.len(), |&dl| dl);
+                        let dl = self.decision_levels.last().map_or(0, |&dl| dl);
                         return Some((
                             dl,
                             VariableAssignment::new(literal.variable.handle, literal.negated),
@@ -285,7 +282,7 @@ impl Solver {
                             return Some((
                                 self.decision_levels.len(),
                                 VariableAssignment::new(v, negated),
-                            ))
+                            ));
                         }
                     }
                 };
@@ -366,6 +363,32 @@ impl Solver {
         Solution::Sat
     }
 
+    fn backtrack_once(&mut self) -> Option<(DecisionLevel, VariableAssignment)> {
+        let variable_assignment = if let Some(variable_assignment) = self.decisions.pop() {
+            variable_assignment
+        } else {
+            // all variables exhausted
+            return None;
+        };
+
+        self.values[variable_assignment.handle] = Value::Unknown;
+
+        for &c in self.variable_clauses[variable_assignment.handle].iter() {
+            // undo clause length changes from trying this assignment
+            self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
+            if self.clause_truth_variables[c] == Some(variable_assignment.handle) {
+                // undo clause value changes from trying this assignment
+                self.clause_values[c] = Value::Unknown;
+                self.clause_truth_variables[c] = None;
+            }
+        }
+
+        Some((
+            self.decision_levels.pop().map_or(0, |dl| dl),
+            variable_assignment,
+        ))
+    }
+
     pub fn solve(&mut self) -> Solution {
         println!(
             "Solving for {} variables with {} clauses",
@@ -389,24 +412,31 @@ impl Solver {
         self.decisions.reserve(self.variables.len());
         self.decision_levels.reserve(self.variables.len());
 
-        let (decision_level, unassigned) =
-            if let Some((decision_level, variable_assignment)) = self.next_unassigned() {
-                (decision_level, variable_assignment)
-            } else {
-                println!("All variables assigned!");
-                return Solution::Sat;
-            };
+        let unassigned = if let Some((_, variable_assignment)) = self.next_unassigned() {
+            variable_assignment
+        } else {
+            println!("All variables assigned!");
+            return Solution::Sat;
+        };
 
         self.values[unassigned.handle] = unassigned.values[0];
         self.decisions.push(unassigned);
-        // self.decision_levels.push(decision_level);
 
         let mut i = 0;
         loop {
+            if self.decisions.len() != self.decision_levels.len() + 1 {
+                unreachable!(
+                    "Decision misalignment! decisions: {}, decision levels: {}",
+                    self.decisions.len(),
+                    self.decision_levels.len()
+                );
+            }
+
             i += 1;
             if i % 100_000 == 0 {
                 println!(
-                    "Vars: {} / {} Clauses: {} / {}",
+                    "{}: Vars: {} / {} Clauses: {} / {} DL: {}",
+                    i,
                     self.variables.len() - self.decisions.len(),
                     self.variables.len(),
                     self.clauses.len()
@@ -416,39 +446,67 @@ impl Solver {
                             .filter(|&&v| v == Value::True)
                             .count(),
                     self.clauses.len(),
+                    self.decision_levels.last().map_or(0, |&dl| dl)
                 );
             }
             match self.check_satisfiability() {
                 Solution::Sat => {
-                    println!("All clauses satisfied!");
+                    println!("Solved in Iterations: {}", i);
                     return Solution::Sat;
                 }
                 Solution::UnSat => {
-                    let variable_assignment = 'backtrack: loop {
-                        let variable_assignment =
-                            if let Some(variable_assignment) = self.decisions.pop() {
-                                variable_assignment
+                    let prior_decision_level = self.decision_levels.last().map_or(0, |&dl| dl);
+
+                    let (decision_level, variable_assignment) = 'backtrack: loop {
+                        let (decision_level, variable_assignment) =
+                            if let Some(var) = self.backtrack_once() {
+                                var
                             } else {
                                 // all variables exhausted
+                                println!("All variables exhausted, decision_level");
                                 return Solution::UnSat;
                             };
 
-                        self.values[variable_assignment.handle] = Value::Unknown;
-
-                        for &c in self.variable_clauses[variable_assignment.handle].iter() {
-                            // undo clause length changes from trying this assignment
-                            self.clause_lengths[c] = self.clause_length(&self.clauses[c]);
-                            if self.clause_truth_variables[c] == Some(variable_assignment.handle) {
-                                // undo clause value changes from trying this assignment
-                                self.clause_values[c] = Value::Unknown;
-                                self.clause_truth_variables[c] = None;
-                            }
-                        }
-
-                        if variable_assignment.index == 0 {
-                            break 'backtrack variable_assignment;
+                        if self.decision_levels.last().map_or(0, |&dl| dl) != prior_decision_level
+                            || self.decision_levels.len() == 0
+                        {
+                            break 'backtrack (decision_level, variable_assignment);
                         }
                     };
+
+                    let (decision_level, variable_assignment) = if variable_assignment.index == 0 {
+                        (decision_level, variable_assignment)
+                    } else {
+                        'backtrack: loop {
+                            let (decision_level, variable_assignment) =
+                                if let Some(var) = self.backtrack_once() {
+                                    var
+                                } else {
+                                    // all variables exhausted
+                                    println!("All variables exhausted, other assignment");
+                                    return Solution::UnSat;
+                                };
+
+                            if variable_assignment.index == 0 {
+                                break 'backtrack (decision_level, variable_assignment);
+                            }
+                        }
+                    };
+
+                    // let (decision_level, variable_assignment) = 'backtrack: loop {
+                    //     let (decision_level, variable_assignment) =
+                    //         if let Some(var) = self.backtrack_once() {
+                    //             var
+                    //         } else {
+                    //             // all variables exhausted
+                    //             println!("All variables exhausted, other assignment");
+                    //             return Solution::UnSat;
+                    //         };
+
+                    //     if variable_assignment.index == 0 {
+                    //         break 'backtrack (decision_level, variable_assignment);
+                    //     }
+                    // };
 
                     // reached a variable with a remaining assignment, try the other truth value
                     self.values[variable_assignment.handle] = variable_assignment.values[1];
@@ -457,12 +515,15 @@ impl Solver {
                         index: 1,
                         ..variable_assignment
                     });
+                    if self.decisions.len() > 1 {
+                        self.decision_levels.push(decision_level);
+                    }
                 }
                 Solution::Unknown => {
                     if let Some((decision_level, var)) = self.next_unassigned() {
                         self.values[var.handle] = var.values[0];
                         self.decisions.push(var);
-                        // self.decision_levels.push(decision_level);
+                        self.decision_levels.push(decision_level);
                     } else {
                         unreachable!("No next unassigned variable, yet unknown clauses!");
                     };
