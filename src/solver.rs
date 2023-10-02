@@ -398,7 +398,8 @@ impl Solver {
             };
 
         self.values[unassigned.handle] = unassigned.values[0];
-        self.decision_levels.push(0);
+        self.decisions.push(unassigned);
+        // self.decision_levels.push(decision_level);
 
         let mut i = 0;
         loop {
@@ -461,6 +462,7 @@ impl Solver {
                     if let Some((decision_level, var)) = self.next_unassigned() {
                         self.values[var.handle] = var.values[0];
                         self.decisions.push(var);
+                        // self.decision_levels.push(decision_level);
                     } else {
                         unreachable!("No next unassigned variable, yet unknown clauses!");
                     };
