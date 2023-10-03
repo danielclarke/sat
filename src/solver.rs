@@ -138,7 +138,7 @@ impl Not for Literal {
 }
 
 type Clause = Vec<Literal>;
-type DecisionLevel = usize;
+type DecisionLevel = Option<usize>;
 
 #[derive(Copy, Clone)]
 struct VariableAssignment {
@@ -217,7 +217,7 @@ impl Solver {
             if clause_length == 1 {
                 for literal in &self.clauses[c] {
                     if literal.value(self.values[literal.variable.handle]) == Value::Unknown {
-                        let dl = self.decision_levels.last().map_or(0, |&dl| dl);
+                        let dl = self.decision_levels.last().map_or(None, |&dl| dl);
                         return Some((
                             dl,
                             VariableAssignment::new(literal.variable.handle, literal.negated),
@@ -280,7 +280,7 @@ impl Solver {
                         None => (),
                         Some(negated) => {
                             return Some((
-                                self.decision_levels.len(),
+                                Some(self.decision_levels.len()),
                                 VariableAssignment::new(v, negated),
                             ));
                         }
@@ -292,7 +292,7 @@ impl Solver {
         // smallest clause
         handle.map(|handle| {
             (
-                self.decision_levels.len(),
+                Some(self.decision_levels.len()),
                 VariableAssignment::new(handle, false),
             )
         })
@@ -384,7 +384,7 @@ impl Solver {
         }
 
         Some((
-            self.decision_levels.pop().map_or(0, |dl| dl),
+            self.decision_levels.pop().map_or(None, |dl| dl),
             variable_assignment,
         ))
     }
@@ -412,8 +412,8 @@ impl Solver {
         self.decisions.reserve(self.variables.len());
         self.decision_levels.reserve(self.variables.len());
 
-        let unassigned = if let Some((_, variable_assignment)) = self.next_unassigned() {
-            variable_assignment
+        let (decision_level, unassigned) = if let Some(var) = self.next_unassigned() {
+            var
         } else {
             println!("All variables assigned!");
             return Solution::Sat;
@@ -421,10 +421,11 @@ impl Solver {
 
         self.values[unassigned.handle] = unassigned.values[0];
         self.decisions.push(unassigned);
+        self.decision_levels.push(decision_level);
 
         let mut i = 0;
         loop {
-            if self.decisions.len() != self.decision_levels.len() + 1 {
+            if self.decisions.len() != self.decision_levels.len() {
                 unreachable!(
                     "Decision misalignment! decisions: {}, decision levels: {}",
                     self.decisions.len(),
@@ -435,7 +436,7 @@ impl Solver {
             i += 1;
             if i % 100_000 == 0 {
                 println!(
-                    "{}: Vars: {} / {} Clauses: {} / {} DL: {}",
+                    "{}: Vars: {} / {} Clauses: {} / {} DL: {:#?}",
                     i,
                     self.variables.len() - self.decisions.len(),
                     self.variables.len(),
@@ -446,7 +447,7 @@ impl Solver {
                             .filter(|&&v| v == Value::True)
                             .count(),
                     self.clauses.len(),
-                    self.decision_levels.last().map_or(0, |&dl| dl)
+                    self.decision_levels.last().map_or(None, |&dl| dl)
                 );
             }
             match self.check_satisfiability() {
@@ -455,7 +456,7 @@ impl Solver {
                     return Solution::Sat;
                 }
                 Solution::UnSat => {
-                    let prior_decision_level = self.decision_levels.last().map_or(0, |&dl| dl);
+                    let prior_decision_level = self.decision_levels.last().map_or(None, |&dl| dl);
 
                     let (decision_level, variable_assignment) = 'backtrack: loop {
                         let (decision_level, variable_assignment) =
@@ -467,7 +468,9 @@ impl Solver {
                                 return Solution::UnSat;
                             };
 
-                        if self.decision_levels.last().map_or(0, |&dl| dl) != prior_decision_level
+                        // go to the first decision with the same decision level
+                        if self.decision_levels.last().map_or(None, |&dl| dl)
+                            != prior_decision_level
                             || self.decision_levels.len() == 0
                         {
                             break 'backtrack (decision_level, variable_assignment);
@@ -515,9 +518,7 @@ impl Solver {
                         index: 1,
                         ..variable_assignment
                     });
-                    if self.decisions.len() > 1 {
-                        self.decision_levels.push(decision_level);
-                    }
+                    self.decision_levels.push(decision_level);
                 }
                 Solution::Unknown => {
                     if let Some((decision_level, var)) = self.next_unassigned() {
@@ -534,7 +535,7 @@ impl Solver {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_stack {
     use super::*;
     use std::error::Error;
 
