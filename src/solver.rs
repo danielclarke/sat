@@ -20,6 +20,11 @@ where
         self.stack = vec![None; capacity];
     }
 
+    fn clear(&mut self) {
+        self.stack = vec![None; self.stack.len()];
+        self.top = 0;
+    }
+
     fn push(&mut self, item: T) {
         self.stack[self.top] = Some(item);
         self.top += 1;
@@ -182,6 +187,7 @@ pub struct Solver {
     // state
     values: Vec<Value>,
     watched_literals: Vec<[Literal; 2]>,
+    unit_clauses: Stack<usize>,
 }
 
 impl Solver {
@@ -196,6 +202,7 @@ impl Solver {
             decision_levels: Stack::new(),
             clauses: vec![],
             watched_literals: vec![],
+            unit_clauses: Stack::new(),
         }
     }
 
@@ -215,21 +222,48 @@ impl Solver {
         self.values[variable.handle]
     }
 
-    fn next_unassigned(&self) -> Option<(DecisionLevel, VariableAssignment)> {
+    fn next_unassigned(&mut self) -> Option<(DecisionLevel, VariableAssignment)> {
         // unassigned variable search order:
         //   1. unit clause
         //   2. pure literal
         //   3. smallest clause
 
+        while let Some(c) = self.unit_clauses.pop() {
+            match self.eval_clause(&self.clauses[c]) {
+                // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                Value::True => continue,
+                Value::False => unreachable!("False clause not earlier caught"),
+                Value::Unknown => (),
+            }
+
+            for literal in &self.clauses[c] {
+                if literal.value(self.values[literal.variable.handle]) == Value::Unknown {
+                    let dl = self.decision_levels.last().map_or(None, |&dl| dl);
+                    return Some((
+                        dl,
+                        VariableAssignment::new(literal.variable.handle, literal.negated),
+                    ));
+                }
+            }
+        }
+
         let (mut handle, mut min_clause_length) = (None, None);
         for (c, clause) in self.clauses.iter().enumerate() {
-            if self.eval_clause(clause) != Value::Unknown {
+            // unit clause propagation
+            let clause_length = self.clause_length(clause);
+
+            if clause_length == 0 {
                 continue;
             }
 
-            // unit clause propagation
-            let clause_length = self.clause_length(clause);
             if clause_length == 1 {
+                match self.eval_clause(&self.clauses[c]) {
+                    // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                    Value::True => continue,
+                    Value::False => unreachable!("False clause not earlier caught"),
+                    Value::Unknown => (),
+                }
+
                 for literal in &self.clauses[c] {
                     if literal.value(self.values[literal.variable.handle]) == Value::Unknown {
                         let dl = self.decision_levels.last().map_or(None, |&dl| dl);
@@ -314,15 +348,10 @@ impl Solver {
     }
 
     fn clause_length(&self, clause: &Clause) -> usize {
-        let mut acc = 0;
-        for literal in clause {
-            match literal.value(self.values[literal.variable.handle]) {
-                Value::True => (),
-                Value::False => (),
-                Value::Unknown => acc += 1,
-            }
-        }
-        acc
+        clause
+            .iter()
+            .filter(|l| self.values[l.variable.handle] == Value::Unknown)
+            .count()
     }
 
     fn eval_clause(&self, clause: &Clause) -> Value {
@@ -366,13 +395,16 @@ impl Solver {
                     };
 
                 match self.clause_length(&self.clauses[c]) {
-                    0 => match self.eval_clause(&self.clauses[c]) {
-                        Value::False => {
+                    0 => {
+                        if self.eval_clause(&self.clauses[c]) == Value::False {
                             return Solution::UnSat;
                         }
-                        _ => (),
-                    },
-                    1 => (), // do something with the unit literal
+                    }
+                    1 => {
+                        if self.eval_clause(&self.clauses[c]) == Value::Unknown {
+                            self.unit_clauses.push(c);
+                        }
+                    }
                     _ => {
                         for &l in self.clauses[c].iter() {
                             if self.values[l.variable.handle] == Value::Unknown
@@ -451,6 +483,7 @@ impl Solver {
 
         self.decisions.reserve(self.variables.len());
         self.decision_levels.reserve(self.variables.len());
+        self.unit_clauses.reserve(self.clauses.len());
     }
 
     pub fn solve(&mut self) -> Solution {
@@ -499,6 +532,8 @@ impl Solver {
                     return Solution::Sat;
                 }
                 Solution::UnSat => {
+                    self.unit_clauses.clear();
+
                     let prior_decision_level = self.decision_levels.last().map_or(None, |&dl| dl);
 
                     let (decision_level, variable_assignment) = 'backtrack: loop {
