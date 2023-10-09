@@ -109,7 +109,7 @@ pub struct Variable {
 impl Variable {
     pub fn literal(&self) -> Literal {
         Literal {
-            negated: false,
+            polarity: true,
             variable: *self,
         }
     }
@@ -117,16 +117,16 @@ impl Variable {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Literal {
-    negated: bool,
+    polarity: bool,
     variable: Variable,
 }
 
 impl Literal {
     fn value(&self, value: Value) -> Value {
-        if self.negated {
-            !value
-        } else {
+        if self.polarity {
             value
+        } else {
+            !value
         }
     }
 }
@@ -136,7 +136,7 @@ impl Not for Literal {
 
     fn not(self) -> <Self as Not>::Output {
         Literal {
-            negated: !self.negated,
+            polarity: !self.polarity,
             variable: self.variable,
         }
     }
@@ -153,11 +153,11 @@ struct VariableAssignment {
 }
 
 impl VariableAssignment {
-    fn new(handle: usize, negated: bool) -> Self {
-        let values = if negated {
-            [Value::False, Value::True]
-        } else {
+    fn new(handle: usize, polarity: bool) -> Self {
+        let values = if polarity {
             [Value::True, Value::False]
+        } else {
+            [Value::False, Value::True]
         };
         Self {
             handle,
@@ -241,7 +241,7 @@ impl Solver {
                     let dl = self.decision_levels.last().map_or(None, |&dl| dl);
                     return Some((
                         dl,
-                        VariableAssignment::new(literal.variable.handle, literal.negated),
+                        VariableAssignment::new(literal.variable.handle, literal.polarity),
                     ));
                 }
             }
@@ -269,7 +269,7 @@ impl Solver {
                         let dl = self.decision_levels.last().map_or(None, |&dl| dl);
                         return Some((
                             dl,
-                            VariableAssignment::new(literal.variable.handle, literal.negated),
+                            VariableAssignment::new(literal.variable.handle, literal.polarity),
                         ));
                     }
                 }
@@ -306,15 +306,15 @@ impl Solver {
         for (v, clauses) in self.variable_clauses.iter().enumerate() {
             'next_variable: {
                 if self.values[v] == Value::Unknown {
-                    let mut negated = None;
+                    let mut polarity = None;
                     for &clause in clauses.iter() {
                         if self.eval_clause(&self.clauses[clause]) == Value::Unknown {
                             for literal in self.clauses[clause].iter() {
                                 if literal.variable.handle == v {
-                                    match negated {
-                                        None => negated = Some(literal.negated),
-                                        Some(negated) => {
-                                            if negated == literal.negated {
+                                    match polarity {
+                                        None => polarity = Some(literal.polarity),
+                                        Some(polarity) => {
+                                            if polarity == literal.polarity {
                                                 continue;
                                             } else {
                                                 break 'next_variable;
@@ -325,12 +325,12 @@ impl Solver {
                             }
                         }
                     }
-                    match negated {
+                    match polarity {
                         None => (),
-                        Some(negated) => {
+                        Some(polarity) => {
                             return Some((
                                 Some(self.decision_levels.len()),
-                                VariableAssignment::new(v, negated),
+                                VariableAssignment::new(v, polarity),
                             ));
                         }
                     }
@@ -460,10 +460,10 @@ impl Solver {
         for (i, clause) in self.clauses.iter().enumerate() {
             for literal in clause {
                 self.variable_clauses[literal.variable.handle].push(i);
-                if literal.negated {
-                    self.negative_literal_clauses[literal.variable.handle].push(i);
-                } else {
+                if literal.polarity {
                     self.positive_literal_clauses[literal.variable.handle].push(i);
+                } else {
+                    self.negative_literal_clauses[literal.variable.handle].push(i);
                 }
             }
         }
