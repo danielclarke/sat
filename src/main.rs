@@ -4,6 +4,9 @@ use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::Path;
 
+use festival_scheduler::Scheduler;
+
+mod festival_scheduler;
 mod master_key;
 mod master_key_2;
 mod solver;
@@ -19,29 +22,32 @@ where
 }
 
 fn main() {
-    let lines = if let Ok(lines) = read_lines("data/sudoku/5_hard_sudokus.txt") {
-        lines
-    } else {
-        return;
-    };
-    for (i, sudoku) in lines.enumerate() {
-        match sudoku {
-            Ok(sudoku) => {
-                let board = sudoku_2::Board::from_string(sudoku);
-                println!("Sudoku: {}", i);
-                println!("{}", board);
+    let mut scheduler = Scheduler::new();
+    scheduler.solve();
 
-                let mut solver = sudoku_2::Solver::new(board);
-                match solver.solve() {
-                    Some(solution) => print!("{}", solution),
-                    None => unreachable!("Sudoku should be solvable!"),
-                }
+    // let lines = if let Ok(lines) = read_lines("data/sudoku/5_hard_sudokus.txt") {
+    //     lines
+    // } else {
+    //     return;
+    // };
+    // for (i, sudoku) in lines.enumerate() {
+    //     match sudoku {
+    //         Ok(sudoku) => {
+    //             let board = sudoku_2::Board::from_string(sudoku);
+    //             println!("Sudoku: {}", i);
+    //             println!("{}", board);
 
-                println!();
-            }
-            Err(e) => println!("Error reading sudoku: {}", e),
-        }
-    }
+    //             let mut solver = sudoku_2::Solver::new(board);
+    //             match solver.solve() {
+    //                 Some(solution) => print!("{}", solution),
+    //                 None => unreachable!("Sudoku should be solvable!"),
+    //             }
+
+    //             println!();
+    //         }
+    //         Err(e) => println!("Error reading sudoku: {}", e),
+    //     }
+    // }
 
     // let lock_sheet = master_key_2::LockSheet::load("data/mk2/lock_sheet.txt").expect("Error:");
     // println!("{}", lock_sheet);
