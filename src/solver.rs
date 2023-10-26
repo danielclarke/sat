@@ -584,7 +584,31 @@ impl Solver {
                             let watched_literals = if learned_clause.len() == 1 {
                                 [learned_clause[0], learned_clause[0]] // unit clauses watch the only literal twice
                             } else {
-                                [learned_clause[0], learned_clause[1]]
+                                let mut watched_literals = [learned_clause[0], learned_clause[1]];
+                                let mut index = 0;
+                                for &literal in learned_clause.iter() {
+                                    if self.variable_decision_levels[literal.handle]
+                                        == *self.decision_levels.last().unwrap()
+                                    {
+                                        if index == 1 && literal == watched_literals[0] {
+                                            continue;
+                                        }
+                                        watched_literals[index] = literal;
+                                        index += 1;
+                                        if watched_literals.len() == 2 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                if watched_literals[0] == watched_literals[1] {
+                                    for &literal in learned_clause.iter() {
+                                        if literal != watched_literals[0] {
+                                            watched_literals[1] = literal;
+                                            break;
+                                        }
+                                    }
+                                }
+                                watched_literals
                             };
                             self.watched_literals.push(watched_literals);
                             for literal in watched_literals.iter() {
@@ -840,7 +864,14 @@ impl Solver {
                         self.decisions.push(var);
                         self.decision_levels.push(decision_level);
                     } else {
-                        return self.check_satisfiability();
+                        match self.check_satisfiability() {
+                            Solution::Sat => {
+                                println!("Solved in Iterations: {}", i);
+                                return Solution::Sat;
+                            }
+                            Solution::UnSat => return Solution::UnSat,
+                            Solution::Unknown => return Solution::Unknown,
+                        }
                     };
                 }
             }
