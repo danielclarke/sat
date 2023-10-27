@@ -1,4 +1,4 @@
-use std::{ops::Not, path::Iter};
+use std::ops::Not;
 
 struct Stack<T> {
     top: usize,
@@ -65,7 +65,6 @@ struct SlotMap<T> {
     generations: Vec<Generation>,
     empty: Vec<bool>,
     empty_slot_stack: Vec<usize>,
-    iter_index: usize,
 }
 
 impl<T> SlotMap<T>
@@ -78,7 +77,6 @@ where
             generations: vec![],
             empty: vec![],
             empty_slot_stack: vec![],
-            iter_index: 0,
         }
     }
 
@@ -122,6 +120,38 @@ where
                     generation: self.generations[self.data.len() - 1],
                 }
             }
+        }
+    }
+
+    fn iter(&self) -> SlotMapIterator<T> {
+        SlotMapIterator {
+            slot_map: self,
+            index: 0,
+        }
+    }
+}
+
+struct SlotMapIterator<'a, T> {
+    slot_map: &'a SlotMap<T>,
+    index: usize,
+}
+
+impl<'a, T> Iterator for SlotMapIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.slot_map.data.len() {
+            while self.slot_map.empty[self.index] {
+                self.index += 1;
+                if self.slot_map.data.len() <= self.index {
+                    return None;
+                }
+            }
+            let result = Some(&self.slot_map.data[self.index]);
+            self.index += 1;
+            result
+        } else {
+            None
         }
     }
 }
@@ -181,11 +211,6 @@ impl std::ops::Index<usize> for AdjacencyList {
     fn index(&self, index: usize) -> &Self::Output {
         &self.data[index]
     }
-}
-
-struct ClauseList {
-    constraint_clauses: Vec<Clause>,
-    learned_clauses: Vec<Clause>,
 }
 
 pub enum Solution {
@@ -282,7 +307,57 @@ impl Not for Literal {
     }
 }
 
-type Clause = Vec<Literal>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Clause {
+    literals: Vec<Literal>,
+}
+
+impl Clause {
+    fn new(mut literals: Vec<Literal>) -> Self {
+        literals.sort();
+        literals.dedup();
+        Self { literals }
+    }
+
+    fn len(&self) -> usize {
+        self.literals.len()
+    }
+
+    fn iter(&self) -> ClauseIterator {
+        ClauseIterator {
+            clause: self,
+            index: 0,
+        }
+    }
+}
+
+impl std::ops::Index<usize> for Clause {
+    type Output = Literal;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.literals[index]
+    }
+}
+
+struct ClauseIterator<'a> {
+    clause: &'a Clause,
+    index: usize,
+}
+
+impl<'a> Iterator for ClauseIterator<'a> {
+    type Item = &'a Literal;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.clause.literals.len() {
+            let result = Some(&self.clause.literals[self.index]);
+            self.index += 1;
+            result
+        } else {
+            None
+        }
+    }
+}
+
 type DecisionLevel = Option<usize>;
 type Antecedant = Option<usize>;
 type ClauseIndex = usize;
@@ -294,21 +369,15 @@ fn resolve(a: &Clause, b: &Clause) -> Option<Clause> {
                 let mut resolvent = vec![];
                 for ll_a in a.iter() {
                     if ll_a != l_a {
-                        let found = resolvent.iter().find(|&l| l == ll_a);
-                        if found.is_none() {
-                            resolvent.push(*ll_a);
-                        }
+                        resolvent.push(*ll_a);
                     }
                 }
                 for ll_b in b.iter() {
                     if ll_b != l_b {
-                        let found = resolvent.iter().find(|&l| l == ll_b);
-                        if found.is_none() {
-                            resolvent.push(*ll_b);
-                        }
+                        resolvent.push(*ll_b);
                     }
                 }
-                return Some(resolvent);
+                return Some(Clause::new(resolvent));
             }
         }
     }
@@ -390,8 +459,8 @@ impl Solver {
         var
     }
 
-    pub fn add_clause(&mut self, clause: Clause) {
-        self.clauses.push(clause);
+    pub fn add_clause(&mut self, literals: Vec<Literal>) {
+        self.clauses.push(Clause::new(literals));
     }
 
     pub fn value(&self, variable: &Variable) -> Value {
@@ -412,7 +481,7 @@ impl Solver {
                 Value::Unknown => (),
             }
 
-            for literal in &self.clauses[c] {
+            for literal in self.clauses[c].iter() {
                 if literal.value(self.values[literal.handle]) == Value::Unknown {
                     self.antecedants[literal.handle] = Some(c);
                     let dl = self.decision_levels.last().and_then(|&dl| dl);
@@ -441,7 +510,7 @@ impl Solver {
                     Value::Unknown => (),
                 }
 
-                for literal in &self.clauses[c] {
+                for literal in self.clauses[c].iter() {
                     if literal.value(self.values[literal.handle]) == Value::Unknown {
                         self.antecedants[literal.handle] = Some(c);
                         let dl = self.decision_levels.last().and_then(|&dl| dl);
@@ -456,7 +525,7 @@ impl Solver {
             // cache the smallest clause encountered
             match (handle, min_clause_length) {
                 (None, None) => {
-                    for literal in &self.clauses[c] {
+                    for literal in self.clauses[c].iter() {
                         if literal.value(self.values[literal.handle]) == Value::Unknown {
                             (handle, min_clause_length) =
                                 (Some(literal.handle), Some(clause_length));
@@ -466,7 +535,7 @@ impl Solver {
                 }
                 (Some(_), Some(min_clause_length_)) => {
                     if clause_length < min_clause_length_ {
-                        for literal in &self.clauses[c] {
+                        for literal in self.clauses[c].iter() {
                             if literal.value(self.values[literal.handle]) == Value::Unknown {
                                 (handle, min_clause_length) =
                                     (Some(literal.handle), Some(clause_length));
@@ -533,7 +602,7 @@ impl Solver {
 
     fn eval_clause(&self, clause: &Clause) -> Value {
         let mut acc = Value::False;
-        for literal in clause {
+        for literal in clause.iter() {
             acc = Value::or(acc, literal.value(self.values[literal.handle]));
             if acc == Value::True {
                 return Value::True;
@@ -543,7 +612,7 @@ impl Solver {
     }
 
     fn print_clause(&self, clause: &Clause) {
-        for literal in clause {
+        for literal in clause.iter() {
             if !literal.polarity {
                 print!("¬");
             }
@@ -580,48 +649,7 @@ impl Solver {
                 match self.clause_length(&self.clauses[c]) {
                     0 => {
                         if self.eval_clause(&self.clauses[c]) == Value::False {
-                            let learned_clause = self.conflict_analysis(c);
-                            let watched_literals = if learned_clause.len() == 1 {
-                                [learned_clause[0], learned_clause[0]] // unit clauses watch the only literal twice
-                            } else {
-                                let mut watched_literals = [learned_clause[0], learned_clause[1]];
-                                let mut index = 0;
-                                for &literal in learned_clause.iter() {
-                                    if self.variable_decision_levels[literal.handle]
-                                        == *self.decision_levels.last().unwrap()
-                                    {
-                                        if index == 1 && literal == watched_literals[0] {
-                                            continue;
-                                        }
-                                        watched_literals[index] = literal;
-                                        index += 1;
-                                        if watched_literals.len() == 2 {
-                                            break;
-                                        }
-                                    }
-                                }
-                                if watched_literals[0] == watched_literals[1] {
-                                    for &literal in learned_clause.iter() {
-                                        if literal != watched_literals[0] {
-                                            watched_literals[1] = literal;
-                                            break;
-                                        }
-                                    }
-                                }
-                                watched_literals
-                            };
-                            self.watched_literals.push(watched_literals);
-                            for literal in watched_literals.iter() {
-                                if literal.polarity {
-                                    self.positive_literal_clauses[literal.handle]
-                                        .push(self.clauses.len());
-                                } else {
-                                    self.negative_literal_clauses[literal.handle]
-                                        .push(self.clauses.len());
-                                }
-                                self.variable_clauses[literal.handle].push(self.clauses.len());
-                            }
-                            self.clauses.push(learned_clause);
+                            self.learn_clause(c);
                             return Solution::UnSat;
                         }
                     }
@@ -731,7 +759,7 @@ impl Solver {
     fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
         let mut clause = self.clauses[clause_index].clone();
 
-        let mut literal_stack = clause.clone();
+        let mut literal_stack = clause.literals.clone();
         let mut visited_stack = vec![];
 
         loop {
@@ -750,12 +778,10 @@ impl Solver {
                     None => (),
                     Some(antecedant) => {
                         visited_stack.push(literal);
-                        literal_stack.append(&mut self.clauses[antecedant].clone());
+                        literal_stack.append(&mut self.clauses[antecedant].literals.clone());
                         match resolve(&clause, &self.clauses[antecedant]) {
                             None => (),
                             Some(mut resolvent) => {
-                                clause.sort();
-                                resolvent.sort();
                                 if clause == resolvent {
                                     self.print_clause(&clause);
                                     return clause;
@@ -769,13 +795,56 @@ impl Solver {
         }
     }
 
+    fn learn_clause(&mut self, c: ClauseIndex) {
+        let learned_clause = self.conflict_analysis(c);
+        let watched_literals = if learned_clause.len() == 1 {
+            [learned_clause[0], learned_clause[0]] // unit clauses watch the only literal twice
+        } else {
+            let mut watched_literals = [learned_clause[0], learned_clause[1]];
+            let mut index = 0;
+            for &literal in learned_clause.iter() {
+                if self.variable_decision_levels[literal.handle]
+                    == *self.decision_levels.last().unwrap()
+                {
+                    if index == 1 && literal == watched_literals[0] {
+                        continue;
+                    }
+                    watched_literals[index] = literal;
+                    index += 1;
+                    if watched_literals.len() == 2 {
+                        break;
+                    }
+                }
+            }
+            if watched_literals[0] == watched_literals[1] {
+                for &literal in learned_clause.iter() {
+                    if literal != watched_literals[0] {
+                        watched_literals[1] = literal;
+                        break;
+                    }
+                }
+            }
+            watched_literals
+        };
+        self.watched_literals.push(watched_literals);
+        for literal in watched_literals.iter() {
+            if literal.polarity {
+                self.positive_literal_clauses[literal.handle].push(self.clauses.len());
+            } else {
+                self.negative_literal_clauses[literal.handle].push(self.clauses.len());
+            }
+            self.variable_clauses[literal.handle].push(self.clauses.len());
+        }
+        self.clauses.push(learned_clause);
+    }
+
     fn init(&mut self) {
         self.variable_clauses = vec![vec![]; self.variables.len()];
         self.positive_literal_clauses = vec![vec![]; self.variables.len()];
         self.negative_literal_clauses = vec![vec![]; self.variables.len()];
 
         for (i, clause) in self.clauses.iter().enumerate() {
-            for literal in clause {
+            for literal in clause.iter() {
                 self.variable_clauses[literal.handle].push(i);
                 if literal.polarity {
                     self.positive_literal_clauses[literal.handle].push(i);
@@ -926,10 +995,14 @@ mod test_slot_map {
         assert_eq!(slot_map.get(&sk_0), None);
         assert_eq!(slot_map.get(&sk_1), Some(&1));
 
+        assert_eq!(slot_map.iter().collect::<Vec<_>>(), [&1]);
+
         let sk_2 = slot_map.insert(2);
         assert_eq!(slot_map.get(&sk_0), None);
         assert_eq!(slot_map.get(&sk_1), Some(&1));
         assert_eq!(slot_map.get(&sk_2), Some(&2));
+
+        assert_eq!(slot_map.iter().collect::<Vec<_>>(), [&2, &1]);
 
         Ok(())
     }
@@ -943,12 +1016,12 @@ mod test_resolution {
     #[test]
     fn test_resolution() -> Result<(), Box<dyn Error>> {
         let vars = vec![Variable::new(0), Variable::new(1), Variable::new(2)];
-        let clause_a = vec![vars[0].literal(), vars[1].literal()];
-        let clause_b = vec![!vars[1].literal(), vars[2].literal()];
+        let clause_a = Clause::new(vec![vars[0].literal(), vars[1].literal()]);
+        let clause_b = Clause::new(vec![!vars[1].literal(), vars[2].literal()]);
 
         assert_eq!(
             resolve(&clause_a, &clause_b),
-            Some(vec![vars[0].literal(), vars[2].literal()])
+            Some(Clause::new(vec![vars[0].literal(), vars[2].literal()]))
         );
 
         Ok(())
