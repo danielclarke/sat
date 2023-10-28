@@ -55,6 +55,7 @@ where
 
 type Generation = usize;
 
+#[derive(Clone, Copy)]
 struct SlotKey {
     index: usize,
     generation: Generation,
@@ -86,6 +87,14 @@ where
         }
 
         Some(&self.data[key.index])
+    }
+
+    fn get_mut(&mut self, key: &SlotKey) -> Option<&mut T> {
+        if self.generations[key.index] != key.generation {
+            return None;
+        }
+
+        Some(&mut self.data[key.index])
     }
 
     fn delete(&mut self, key: &SlotKey) {
@@ -123,6 +132,10 @@ where
         }
     }
 
+    fn len(&self) -> usize {
+        self.empty.iter().filter(|&&empty| !empty).count()
+    }
+
     fn iter(&self) -> SlotMapIterator<T> {
         SlotMapIterator {
             slot_map: self,
@@ -134,6 +147,14 @@ where
 struct SlotMapIterator<'a, T> {
     slot_map: &'a SlotMap<T>,
     index: usize,
+}
+
+impl<'a, T> SlotMapIterator<'a, T> {
+    fn items(&'a mut self) -> SlotMapEnumerator<'a, T> {
+        SlotMapEnumerator {
+            slot_map_iterator: self,
+        }
+    }
 }
 
 impl<'a, T> Iterator for SlotMapIterator<'a, T> {
@@ -152,6 +173,33 @@ impl<'a, T> Iterator for SlotMapIterator<'a, T> {
             result
         } else {
             None
+        }
+    }
+}
+
+struct SlotMapEnumerator<'a, T> {
+    slot_map_iterator: &'a mut SlotMapIterator<'a, T>,
+}
+
+impl<'a, T> Iterator for SlotMapEnumerator<'a, T> {
+    type Item = (SlotKey, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let n = self.slot_map_iterator.next();
+
+        match n {
+            None => return None,
+            Some(v) => {
+                let generation =
+                    self.slot_map_iterator.slot_map.generations[self.slot_map_iterator.index - 1];
+                return Some((
+                    SlotKey {
+                        index: self.slot_map_iterator.index - 1,
+                        generation,
+                    },
+                    v,
+                ));
+            }
         }
     }
 }
@@ -294,8 +342,6 @@ impl Literal {
     }
 }
 
-// impl Ord for Literal {}
-
 impl Not for Literal {
     type Output = Literal;
 
@@ -359,8 +405,8 @@ impl<'a> Iterator for ClauseIterator<'a> {
 }
 
 type DecisionLevel = Option<usize>;
-type Antecedant = Option<usize>;
-type ClauseIndex = usize;
+type Antecedant = Option<SlotKey>;
+type ClauseIndex = SlotKey;
 
 fn resolve(a: &Clause, b: &Clause) -> Option<Clause> {
     for l_a in a.iter() {
@@ -409,7 +455,7 @@ impl VariableAssignment {
 pub struct Solver {
     // problem
     variables: Vec<Variable>,
-    clauses: Vec<Clause>,
+    clauses: SlotMap<Clause>,
 
     // lookup
     // variable map to clause
@@ -430,7 +476,7 @@ pub struct Solver {
     implication_vertices: AdjacencyList,
 
     // implication_vertices:
-    watched_literals: Vec<[Literal; 2]>,
+    watched_literals: SlotMap<[Literal; 2]>,
     unit_clauses: Stack<ClauseIndex>,
 }
 
@@ -438,7 +484,7 @@ impl Solver {
     pub fn new() -> Self {
         Self {
             variables: vec![],
-            clauses: vec![],
+            clauses: SlotMap::new(),
             variable_clauses: vec![],
             positive_literal_clauses: vec![],
             negative_literal_clauses: vec![],
@@ -448,7 +494,7 @@ impl Solver {
             variable_decision_levels: vec![],
             antecedants: vec![],
             implication_vertices: AdjacencyList::new(),
-            watched_literals: vec![],
+            watched_literals: SlotMap::new(),
             unit_clauses: Stack::new(),
         }
     }
@@ -460,7 +506,7 @@ impl Solver {
     }
 
     pub fn add_clause(&mut self, literals: Vec<Literal>) {
-        self.clauses.push(Clause::new(literals));
+        self.clauses.insert(Clause::new(literals));
     }
 
     pub fn value(&self, variable: &Variable) -> Value {
@@ -474,14 +520,14 @@ impl Solver {
         //   3. smallest clause
 
         while let Some(c) = self.unit_clauses.pop() {
-            match self.eval_clause(&self.clauses[c]) {
+            match self.eval_clause(self.clauses.get(&c).unwrap()) {
                 // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
                 Value::True => continue,
                 Value::False => unreachable!("False clause not earlier caught"),
                 Value::Unknown => (),
             }
 
-            for literal in self.clauses[c].iter() {
+            for literal in self.clauses.get(&c).unwrap().iter() {
                 if literal.value(self.values[literal.handle]) == Value::Unknown {
                     self.antecedants[literal.handle] = Some(c);
                     let dl = self.decision_levels.last().and_then(|&dl| dl);
@@ -494,7 +540,7 @@ impl Solver {
         }
 
         let (mut handle, mut min_clause_length) = (None, None);
-        for (c, clause) in self.clauses.iter().enumerate() {
+        for (slot_key, clause) in self.clauses.iter().items() {
             // unit clause propagation
             let clause_length = self.clause_length(clause);
 
@@ -503,16 +549,16 @@ impl Solver {
             }
 
             if clause_length == 1 {
-                match self.eval_clause(&self.clauses[c]) {
+                match self.eval_clause(clause) {
                     // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
                     Value::True => continue,
                     Value::False => unreachable!("False clause not earlier caught"),
                     Value::Unknown => (),
                 }
 
-                for literal in self.clauses[c].iter() {
+                for literal in clause.iter() {
                     if literal.value(self.values[literal.handle]) == Value::Unknown {
-                        self.antecedants[literal.handle] = Some(c);
+                        self.antecedants[literal.handle] = Some(slot_key);
                         let dl = self.decision_levels.last().and_then(|&dl| dl);
                         return Some((
                             dl,
@@ -525,7 +571,7 @@ impl Solver {
             // cache the smallest clause encountered
             match (handle, min_clause_length) {
                 (None, None) => {
-                    for literal in self.clauses[c].iter() {
+                    for literal in clause.iter() {
                         if literal.value(self.values[literal.handle]) == Value::Unknown {
                             (handle, min_clause_length) =
                                 (Some(literal.handle), Some(clause_length));
@@ -535,7 +581,7 @@ impl Solver {
                 }
                 (Some(_), Some(min_clause_length_)) => {
                     if clause_length < min_clause_length_ {
-                        for literal in self.clauses[c].iter() {
+                        for literal in clause.iter() {
                             if literal.value(self.values[literal.handle]) == Value::Unknown {
                                 (handle, min_clause_length) =
                                     (Some(literal.handle), Some(clause_length));
@@ -554,8 +600,8 @@ impl Solver {
                 if self.values[v] == Value::Unknown {
                     let mut polarity = None;
                     for &clause in clauses.iter() {
-                        if self.eval_clause(&self.clauses[clause]) == Value::Unknown {
-                            for literal in self.clauses[clause].iter() {
+                        if self.eval_clause(self.clauses.get(&clause).unwrap()) == Value::Unknown {
+                            for literal in self.clauses.get(&clause).unwrap().iter() {
                                 if literal.handle == v {
                                     match polarity {
                                         None => polarity = Some(literal.polarity),
@@ -638,34 +684,36 @@ impl Solver {
 
             // iterate watching clauses and reassign the watched literal to an unset one
             for &c in false_literal_clauses.iter() {
-                let watched_literal_index = if va.handle == self.watched_literals[c][0].handle {
-                    0
-                } else if va.handle == self.watched_literals[c][1].handle {
-                    1
-                } else {
-                    continue;
-                };
+                let watched_literal_index =
+                    if va.handle == self.watched_literals.get(&c).unwrap()[0].handle {
+                        0
+                    } else if va.handle == self.watched_literals.get(&c).unwrap()[1].handle {
+                        1
+                    } else {
+                        continue;
+                    };
 
-                match self.clause_length(&self.clauses[c]) {
+                match self.clause_length(self.clauses.get(&c).unwrap()) {
                     0 => {
-                        if self.eval_clause(&self.clauses[c]) == Value::False {
+                        if self.eval_clause(self.clauses.get(&c).unwrap()) == Value::False {
                             self.learn_clause(c);
                             return Solution::UnSat;
                         }
                     }
                     1 => {
-                        if self.eval_clause(&self.clauses[c]) == Value::Unknown {
+                        if self.eval_clause(self.clauses.get(&c).unwrap()) == Value::Unknown {
                             self.unit_clauses.push(c);
                         }
                     }
                     _ => {
-                        for &l in self.clauses[c].iter() {
+                        for &l in self.clauses.get(&c).unwrap().iter() {
                             if self.values[l.handle] == Value::Unknown
-                                && l != self.watched_literals[c][0]
-                                && l != self.watched_literals[c][1]
+                                && l != self.watched_literals.get(&c).unwrap()[0]
+                                && l != self.watched_literals.get(&c).unwrap()[1]
                             {
                                 // replace the watched literal
-                                self.watched_literals[c][watched_literal_index] = l;
+                                self.watched_literals.get_mut(&c).unwrap()[watched_literal_index] =
+                                    l;
                                 break;
                             }
                         }
@@ -757,7 +805,7 @@ impl Solver {
     }
 
     fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
-        let mut clause = self.clauses[clause_index].clone();
+        let mut clause = self.clauses.get(&clause_index).unwrap().clone();
 
         let mut literal_stack = clause.literals.clone();
         let mut visited_stack = vec![];
@@ -772,18 +820,19 @@ impl Solver {
 
             if self.variable_decision_levels[literal.handle]
                 == *self.decision_levels.last().unwrap()
-                && visited_stack.iter().find(|&&l| l == literal).is_none()
+                && !visited_stack.contains(&literal)
             {
                 match self.antecedants[literal.handle] {
                     None => (),
                     Some(antecedant) => {
                         visited_stack.push(literal);
-                        literal_stack.append(&mut self.clauses[antecedant].literals.clone());
-                        match resolve(&clause, &self.clauses[antecedant]) {
+                        literal_stack
+                            .append(&mut self.clauses.get(&antecedant).unwrap().literals.clone());
+                        match resolve(&clause, &self.clauses.get(&antecedant).unwrap()) {
                             None => (),
-                            Some(mut resolvent) => {
+                            Some(resolvent) => {
                                 if clause == resolvent {
-                                    self.print_clause(&clause);
+                                    // self.print_clause(&clause);
                                     return clause;
                                 }
                                 clause = resolvent;
@@ -826,16 +875,16 @@ impl Solver {
             }
             watched_literals
         };
-        self.watched_literals.push(watched_literals);
-        for literal in watched_literals.iter() {
+        self.watched_literals.insert(watched_literals);
+        let slot_key = self.clauses.insert(learned_clause);
+        for literal in self.clauses.get(&slot_key).unwrap().iter() {
             if literal.polarity {
-                self.positive_literal_clauses[literal.handle].push(self.clauses.len());
+                self.positive_literal_clauses[literal.handle].push(slot_key);
             } else {
-                self.negative_literal_clauses[literal.handle].push(self.clauses.len());
+                self.negative_literal_clauses[literal.handle].push(slot_key);
             }
-            self.variable_clauses[literal.handle].push(self.clauses.len());
+            self.variable_clauses[literal.handle].push(slot_key);
         }
-        self.clauses.push(learned_clause);
     }
 
     fn init(&mut self) {
@@ -843,20 +892,20 @@ impl Solver {
         self.positive_literal_clauses = vec![vec![]; self.variables.len()];
         self.negative_literal_clauses = vec![vec![]; self.variables.len()];
 
-        for (i, clause) in self.clauses.iter().enumerate() {
+        for (slot_key, clause) in self.clauses.iter().items() {
             for literal in clause.iter() {
-                self.variable_clauses[literal.handle].push(i);
+                self.variable_clauses[literal.handle].push(slot_key);
                 if literal.polarity {
-                    self.positive_literal_clauses[literal.handle].push(i);
+                    self.positive_literal_clauses[literal.handle].push(slot_key);
                 } else {
-                    self.negative_literal_clauses[literal.handle].push(i);
+                    self.negative_literal_clauses[literal.handle].push(slot_key);
                 }
             }
         }
 
         self.values = vec![Value::Unknown; self.variables.len()];
         self.variable_decision_levels = vec![None; self.variables.len()];
-        self.watched_literals = self
+        let watched_literals = self
             .clauses
             .iter()
             .map(|c| {
@@ -866,7 +915,11 @@ impl Solver {
                     [c[0], c[1]]
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        for watched_literal in watched_literals {
+            self.watched_literals.insert(watched_literal);
+        }
 
         self.decisions.reserve(self.variables.len());
         self.decision_levels.reserve(self.variables.len());
