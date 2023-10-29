@@ -55,8 +55,8 @@ where
 
 type Generation = usize;
 
-#[derive(Clone, Copy)]
-struct SlotKey {
+#[derive(Debug, Clone, Copy)]
+pub struct SlotKey {
     index: usize,
     generation: Generation,
 }
@@ -505,8 +505,8 @@ impl Solver {
         var
     }
 
-    pub fn add_clause(&mut self, literals: Vec<Literal>) {
-        self.clauses.insert(Clause::new(literals));
+    pub fn add_clause(&mut self, literals: Vec<Literal>) -> SlotKey {
+        self.clauses.insert(Clause::new(literals))
     }
 
     pub fn value(&self, variable: &Variable) -> Value {
@@ -807,32 +807,36 @@ impl Solver {
     fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
         let mut clause = self.clauses.get(&clause_index).unwrap().clone();
 
-        let mut literal_stack = clause.literals.clone();
-        let mut visited_stack = vec![];
+        let mut literal_queue = clause.literals.clone();
+        let mut visited_list = vec![];
 
         loop {
-            let literal = if let Some(literal) = literal_stack.pop() {
-                literal
-            } else {
-                // self.print_clause(&clause);
+            if literal_queue.is_empty() {
                 return clause;
-            };
+            }
+
+            let literal = literal_queue.remove(0);
 
             if self.variable_decision_levels[literal.handle]
                 == *self.decision_levels.last().unwrap()
-                && !visited_stack.contains(&literal)
             {
+                visited_list.push(literal.handle);
                 match self.antecedants[literal.handle] {
                     None => (),
                     Some(antecedant) => {
-                        visited_stack.push(literal);
-                        literal_stack
-                            .append(&mut self.clauses.get(&antecedant).unwrap().literals.clone());
+                        let antecedant_clause =
+                            &mut self.clauses.get(&antecedant).unwrap().literals.clone();
+                        literal_queue.append(
+                            &mut antecedant_clause
+                                .iter()
+                                .filter(|&&l| !visited_list.contains(&l.handle))
+                                .map(|&l| l)
+                                .collect::<Vec<_>>(),
+                        );
                         match resolve(&clause, &self.clauses.get(&antecedant).unwrap()) {
                             None => (),
                             Some(resolvent) => {
                                 if clause == resolvent {
-                                    // self.print_clause(&clause);
                                     return clause;
                                 }
                                 clause = resolvent;
@@ -884,6 +888,9 @@ impl Solver {
                 self.negative_literal_clauses[literal.handle].push(slot_key);
             }
             self.variable_clauses[literal.handle].push(slot_key);
+        }
+        if self.clause_length(&self.clauses.get(&slot_key).unwrap()) == 1 {
+            self.unit_clauses.push(slot_key);
         }
     }
 
@@ -1075,6 +1082,231 @@ mod test_resolution {
         assert_eq!(
             resolve(&clause_a, &clause_b),
             Some(Clause::new(vec![vars[0].literal(), vars[2].literal()]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolution_2() -> Result<(), Box<dyn Error>> {
+        let v1 = Variable::new(0);
+        let v2 = Variable::new(1);
+        let v3 = Variable::new(2);
+        let v4 = Variable::new(3);
+        let v5 = Variable::new(4);
+        let v6 = Variable::new(5);
+        let v31 = Variable::new(6);
+        let v21 = Variable::new(7);
+
+        let c1 = Clause::new(vec![v1.literal(), v31.literal(), !v2.literal()]);
+        let c2 = Clause::new(vec![v1.literal(), !v3.literal()]);
+        let c3 = Clause::new(vec![v2.literal(), v3.literal(), v4.literal()]);
+        let c4 = Clause::new(vec![!v4.literal(), !v5.literal()]);
+        let c5 = Clause::new(vec![v21.literal(), !v4.literal(), !v6.literal()]);
+        let c6 = Clause::new(vec![v5.literal(), v6.literal()]);
+
+        let resolvent = resolve(&c6, &c4);
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![!v4.literal(), v6.literal()]))
+        );
+
+        let resolvent = resolve(&c5, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![v21.literal(), !v4.literal()]))
+        );
+
+        let resolvent = resolve(&c3, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![v21.literal(), v2.literal(), v3.literal()]))
+        );
+
+        let resolvent = resolve(&c1, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                v31.literal(),
+                v21.literal(),
+                v3.literal(),
+                v1.literal()
+            ]))
+        );
+
+        let resolvent = resolve(&c2, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                v31.literal(),
+                v21.literal(),
+                v1.literal()
+            ]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolution_3() -> Result<(), Box<dyn Error>> {
+        let v1 = Variable::new(0);
+        let v2 = Variable::new(1);
+        let v3 = Variable::new(2);
+        let v4 = Variable::new(3);
+        let v5 = Variable::new(4);
+        let v6 = Variable::new(5);
+        let v21 = Variable::new(21);
+        let v31 = Variable::new(31);
+
+        let c1 = Clause::new(vec![v1.literal(), v31.literal(), !v2.literal()]);
+        let c2 = Clause::new(vec![v1.literal(), !v3.literal()]);
+        let c3 = Clause::new(vec![v2.literal(), v3.literal(), v4.literal()]);
+        let c4 = Clause::new(vec![!v4.literal(), !v5.literal()]);
+        let c5 = Clause::new(vec![v21.literal(), !v4.literal(), !v6.literal()]);
+        let c6 = Clause::new(vec![v5.literal(), v6.literal()]);
+
+        // 5 3 2 1 4
+        let resolvent = resolve(&c6, &c5);
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                !v4.literal(),
+                v5.literal(),
+                v21.literal()
+            ]))
+        );
+
+        let resolvent = resolve(&c3, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                v2.literal(),
+                v3.literal(),
+                v5.literal(),
+                v21.literal(),
+            ]))
+        );
+
+        let resolvent = resolve(&c2, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                v1.literal(),
+                v2.literal(),
+                v5.literal(),
+                v21.literal(),
+            ]))
+        );
+
+        let resolvent = resolve(&c1, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                v1.literal(),
+                v5.literal(),
+                v21.literal(),
+                v31.literal(),
+            ]))
+        );
+
+        let resolvent = resolve(&c4, &resolvent.unwrap());
+        assert_eq!(
+            resolvent,
+            Some(Clause::new(vec![
+                v1.literal(),
+                !v4.literal(),
+                v21.literal(),
+                v31.literal(),
+            ]))
+        );
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test_clause_learning {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn test_clause_learning() -> Result<(), Box<dyn Error>> {
+        let mut solver = Solver::new();
+
+        solver.add_var();
+        let v1 = solver.add_var();
+        let v2 = solver.add_var();
+        let v3 = solver.add_var();
+        let v4 = solver.add_var();
+        let v5 = solver.add_var();
+        let v6 = solver.add_var();
+        for _ in 7..21 {
+            solver.add_var();
+        }
+        let v21 = solver.add_var();
+        for _ in 22..31 {
+            solver.add_var();
+        }
+        let v31 = solver.add_var();
+
+        let c1 = vec![v1.literal(), v31.literal(), !v2.literal()];
+        let c2 = vec![v1.literal(), !v3.literal()];
+        let c3 = vec![v2.literal(), v3.literal(), v4.literal()];
+        let c4 = vec![!v4.literal(), !v5.literal()];
+        let c5 = vec![v21.literal(), !v4.literal(), !v6.literal()];
+        let c6 = vec![v5.literal(), v6.literal()];
+
+        let sk1 = solver.add_clause(c1);
+        let sk2 = solver.add_clause(c2);
+        let sk3 = solver.add_clause(c3);
+        let sk4 = solver.add_clause(c4);
+        let sk5 = solver.add_clause(c5);
+        let sk6 = solver.add_clause(c6);
+
+        solver.init();
+
+        solver.values[v21.handle] = Value::False;
+        solver.variable_decision_levels[v21.handle] = Some(2);
+        solver.decision_levels.push(Some(2));
+
+        solver.values[v31.handle] = Value::False;
+        solver.variable_decision_levels[v31.handle] = Some(3);
+        solver.decision_levels.push(Some(3));
+
+        solver.values[v1.handle] = Value::False;
+        solver.variable_decision_levels[v1.handle] = Some(5);
+        solver.decision_levels.push(Some(5));
+
+        solver.values[v2.handle] = Value::False;
+        solver.antecedants[v2.handle] = Some(sk1);
+        solver.variable_decision_levels[v2.handle] = Some(5);
+        solver.decision_levels.push(Some(5));
+
+        solver.values[v3.handle] = Value::False;
+        solver.antecedants[v3.handle] = Some(sk2);
+        solver.variable_decision_levels[v3.handle] = Some(5);
+        solver.decision_levels.push(Some(5));
+
+        solver.values[v4.handle] = Value::False;
+        solver.antecedants[v4.handle] = Some(sk3);
+        solver.variable_decision_levels[v4.handle] = Some(5);
+        solver.decision_levels.push(Some(5));
+
+        solver.values[v5.handle] = Value::False;
+        solver.antecedants[v5.handle] = Some(sk4);
+        solver.variable_decision_levels[v5.handle] = Some(5);
+        solver.decision_levels.push(Some(5));
+
+        solver.values[v6.handle] = Value::False;
+        solver.antecedants[v6.handle] = Some(sk5);
+        solver.variable_decision_levels[v6.handle] = Some(5);
+        solver.decision_levels.push(Some(5));
+
+        let learned_clause = solver.conflict_analysis(sk6);
+
+        assert_eq!(
+            learned_clause,
+            Clause::new(vec![v1.literal(), v21.literal(), v31.literal()])
         );
 
         Ok(())
