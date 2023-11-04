@@ -1,9 +1,16 @@
+use std::fmt;
 type Generation = usize;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SlotKey {
     index: usize,
     generation: Generation,
+}
+
+impl fmt::Display for SlotKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} ({})", self.index, self.generation)
+    }
 }
 
 pub struct SlotMap<T> {

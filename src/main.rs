@@ -46,6 +46,7 @@ fn main() {
             }
             Err(e) => println!("Error reading sudoku: {}", e),
         }
+        break;
     }
 
     // let lock_sheet = master_key_2::LockSheet::load("data/mk2/lock_sheet.txt").expect("Error:");
@@ -55,12 +56,12 @@ fn main() {
     // let mut solver = master_key_2::Solver::new(geometry, lock_sheet);
     // solver.solve();
 
-    let lock_sheet = master_key_2::LockSheet::load("data/mk1/lock_sheet.txt").expect("Error:");
-    println!("{}", lock_sheet);
-    let geometry = master_key_2::Geometry::load("data/mk1/geometry.txt").expect("Error:");
-    println!("{}", geometry);
-    let mut solver = master_key_2::Solver::new(geometry, lock_sheet);
-    solver.solve();
+    // let lock_sheet = master_key_2::LockSheet::load("data/mk1/lock_sheet.txt").expect("Error:");
+    // println!("{}", lock_sheet);
+    // let geometry = master_key_2::Geometry::load("data/mk1/geometry.txt").expect("Error:");
+    // println!("{}", geometry);
+    // let mut solver = master_key_2::Solver::new(geometry, lock_sheet);
+    // solver.solve();
 
     // let lock_sheet = master_key::LockSheet::load("data/mk1/lock_sheet.txt").expect("Error:");
     // println!("{}", lock_sheet);

@@ -272,7 +272,7 @@ impl Solver {
                 if literal.value(self.values[literal.handle]) == Value::Unknown {
                     self.antecedents[literal.handle] = Some(slot_key);
                     let dl = self.decision_levels.last().map_or(Some(0), |&dl| dl);
-                    // println!("BCP {:#?} {:#?}", literal.handle, dl.unwrap());
+                    println!("BCP {:#?} {:#?}", literal.handle, dl.unwrap());
                     return Some((
                         dl,
                         VariableAssignment::new(literal.handle, literal.polarity),
@@ -306,7 +306,7 @@ impl Solver {
                             .last()
                             .map_or(Some(0), |&dl| dl.and_then(|dl| Some(dl + 1)));
 
-                        // println!("BCP {:#?} {:#?}", literal.handle, dl.unwrap());
+                        println!("Unit Clause {:#?} {:#?}", literal.handle, dl.unwrap());
                         return Some((
                             dl,
                             VariableAssignment::new(literal.handle, literal.polarity),
@@ -367,7 +367,7 @@ impl Solver {
                     match polarity {
                         None => (),
                         Some(polarity) => {
-                            // println!("Polarity {:#?}", v);
+                            println!("Polarity {}", v);
                             return Some((
                                 self.decision_levels
                                     .last()
@@ -382,7 +382,7 @@ impl Solver {
 
         // smallest clause
         handle.map(|handle| {
-            // println!("Smallest clause {:#?}", handle);
+            println!("Smallest clause {}", handle);
             (
                 self.decision_levels
                     .last()
@@ -416,7 +416,12 @@ impl Solver {
                 print!("¬");
             }
             print!("x_");
-            print!("{} ", literal.handle,)
+            print!("{}", literal.handle);
+            print!(
+                "_({}) ",
+                self.variable_decision_levels[literal.handle]
+                    .map_or("None".to_owned(), |dl| format!("{}", dl))
+            );
 
             // println!(
             //     "Literal Value {} {:#?}",
@@ -496,7 +501,6 @@ impl Solver {
 
         self.values[variable_assignment.handle] = Value::Unknown;
         self.variable_decision_levels[variable_assignment.handle] = None;
-        self.antecedents[variable_assignment.handle] = None;
 
         Some((
             self.decision_levels.pop().and_then(|dl| dl),
@@ -523,6 +527,8 @@ impl Solver {
                 || self.decision_levels.len() == 0
             {
                 break 'backtrack (decision_level, variable_assignment);
+            } else {
+                self.antecedents[variable_assignment.handle] = None;
             }
         };
 
@@ -555,6 +561,7 @@ impl Solver {
         self.decision_levels.push(decision_level);
         self.variable_decision_levels[variable_assignment.handle] = decision_level;
 
+        println!("Backtracked to {}", variable_assignment.handle);
         Solution::Unknown
     }
 
@@ -629,143 +636,208 @@ impl Solver {
         variable_assignment
     }
 
+    fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
+        let mut clause: Vec<Literal> = vec![];
+
+        let latest_decision_level = *self.decision_levels.last().unwrap();
+        let latest_decision = self.get_most_recent_decision_assignment().unwrap();
+
+        let mut literal_queue = self.clauses.get(&clause_index).unwrap().literals.clone();
+        let mut visited_list = vec![];
+        println!("--------------------------------");
+        print!("Conflict clause {} ", clause_index);
+        self.print_clause(self.clauses.get(&clause_index).unwrap());
+        println!("latest_decision_level {}", latest_decision_level.unwrap());
+        println!("latest_decision {}", latest_decision.handle);
+
+        println!("decision levels");
+        for &dl in self.decision_levels.iter() {
+            match dl {
+                Some(decision_level) => {
+                    print!("{} ", decision_level);
+                }
+                None => print!("None "),
+            }
+        }
+        println!();
+
+        println!("va decision levels");
+        for va in self.decisions.iter() {
+            match self.variable_decision_levels[va.handle] {
+                Some(decision_level) => {
+                    print!("{} ", decision_level);
+                }
+                None => print!("None "),
+            }
+        }
+        println!();
+
+        println!("va value");
+        for va in self.decisions.iter() {
+            match va.values[va.index] {
+                Value::True => print!("1 "),
+                Value::False => print!("0 "),
+                Value::Unknown => (),
+            }
+        }
+        println!();
+
+        println!("va index");
+        for va in self.decisions.iter() {
+            print!("{} ", va.index)
+        }
+        println!();
+
+        for va in self.decisions.iter() {
+            print!("{} ", va.handle);
+        }
+        println!();
+
+        for va in self.decisions.iter() {
+            match self.antecedents[va.handle] {
+                None => println!("antecedent {} None", va.handle),
+                Some(antecedent) => {
+                    // println!("antecedent {} {:#?}", va.handle, antecedent);
+                    print!("antecedent {} ", va.handle);
+                    self.print_clause(self.clauses.get(&antecedent).unwrap());
+                }
+            }
+            // println!("DL {} {:#?}", handle, self.variable_decision_levels[handle]);
+            // println!("DV {:#?}", handle == latest_decision.handle);
+        }
+
+        loop {
+            if literal_queue.is_empty() {
+                // if clause.is_empty() {
+                //     print!("Conflict ");
+                //     self.print_clause(self.clauses.get(&clause_index).unwrap());
+                //     println!("DL {:#?}", latest_decision_level);
+                //     println!("VA {:#?}", latest_decision);
+                //     println!("Visited Lits {:#?}", visited_list);
+                //     for handle in visited_list {
+                //         match self.antecedents[handle] {
+                //             None => println!("antecedent {} None", handle),
+                //             Some(antecedent) => {
+                //                 println!("antecedent {} {:#?}", handle, antecedent);
+                //                 print!("antecedent ");
+                //                 self.print_clause(self.clauses.get(&antecedent).unwrap());
+                //             }
+                //         }
+                //         println!("DL {} {:#?}", handle, self.variable_decision_levels[handle]);
+                //         println!("DV {:#?}", handle == latest_decision.handle);
+                //     }
+                //     println!("--------------------------------");
+                //     // self.print_clause(clause);
+                //     println!(
+                //         "{:#?}",
+                //         clause
+                //             .iter()
+                //             .map(|&literal| self.variable_decision_levels[literal.handle])
+                //             .collect::<Vec<_>>()
+                //     );
+                //     for &dl in self.decision_levels.iter() {
+                //         match dl {
+                //             Some(decision_level) => {
+                //                 print!("{} ", decision_level);
+                //             }
+                //             None => print!("None "),
+                //         }
+                //     }
+                //     println!();
+                //     for va in self.decisions.iter() {
+                //         match self.variable_decision_levels[va.handle] {
+                //             Some(decision_level) => {
+                //                 print!("{} ", decision_level);
+                //             }
+                //             None => print!("None "),
+                //         }
+                //     }
+                //     println!();
+                //     for va in self.decisions.iter() {
+                //         print!("{:#?} ", va.handle);
+                //     }
+                // }
+
+                println!("--------------------------------");
+                return Clause::new(clause);
+            }
+
+            println!("  ------------------------------");
+
+            let literal = literal_queue.remove(0);
+            visited_list.push(literal.handle);
+            if self.variable_decision_levels[literal.handle] == latest_decision_level {
+                if literal.handle == latest_decision.handle {
+                    clause.push(literal);
+                }
+                match self.antecedents[literal.handle] {
+                    None => (),
+                    Some(antecedent) => {
+                        let antecedent_clause =
+                            &mut self.clauses.get(&antecedent).unwrap().literals.clone();
+                        literal_queue.append(
+                            &mut antecedent_clause
+                                .iter()
+                                .filter(|&&l| !visited_list.contains(&l.handle))
+                                .map(|&l| l)
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+            } else {
+                clause.push(literal);
+            }
+        }
+    }
+
     // fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
-    //     let mut clause: Vec<Literal> = vec![];
+    //     let mut clause = self.clauses.get(&clause_index).unwrap().clone();
 
     //     let latest_decision_level = *self.decision_levels.last().unwrap();
-    //     let variable_assignment = self.get_most_recent_decision_assignment().unwrap();
 
-    //     let mut literal_queue = self.clauses.get(&clause_index).unwrap().literals.clone();
+    //     let mut literal_queue = clause
+    //         .literals
+    //         .clone()
+    //         .iter()
+    //         .filter(|&l| self.variable_decision_levels[l.handle] == latest_decision_level)
+    //         .map(|&l| l)
+    //         .collect::<Vec<_>>();
     //     let mut visited_list = vec![];
 
     //     loop {
     //         if literal_queue.is_empty() {
-    //             if clause.is_empty() {
-    //                 print!("Conflict ");
-    //                 self.print_clause(self.clauses.get(&clause_index).unwrap());
-    //                 println!("DL {:#?}", latest_decision_level);
-    //                 println!("VA {:#?}", variable_assignment);
-    //                 println!("Visited Lits {:#?}", visited_list);
-    //                 for handle in visited_list {
-    //                     match self.antecedents[handle] {
-    //                         None => println!("antecedent {} None", handle),
-    //                         Some(antecedent) => {
-    //                             println!("antecedent {} {:#?}", handle, antecedent);
-    //                             print!("antecedent ");
-    //                             self.print_clause(self.clauses.get(&antecedent).unwrap());
-    //                         }
-    //                     }
-    //                     println!("DL {} {:#?}", handle, self.variable_decision_levels[handle]);
-    //                     println!("DV {:#?}", handle == variable_assignment.handle);
-    //                 }
-    //                 println!("--------------------------------");
-    //                 // self.print_clause(clause);
-    //                 println!(
-    //                     "{:#?}",
-    //                     clause
-    //                         .iter()
-    //                         .map(|&literal| self.variable_decision_levels[literal.handle])
-    //                         .collect::<Vec<_>>()
-    //                 );
-    //                 for &dl in self.decision_levels.iter() {
-    //                     match dl {
-    //                         Some(decision_level) => {
-    //                             print!("{} ", decision_level);
-    //                         }
-    //                         None => print!("None "),
-    //                     }
-    //                 }
-    //                 println!();
-    //                 for va in self.decisions.iter() {
-    //                     match self.variable_decision_levels[va.handle] {
-    //                         Some(decision_level) => {
-    //                             print!("{} ", decision_level);
-    //                         }
-    //                         None => print!("None "),
-    //                     }
-    //                 }
-    //                 println!();
-    //                 for va in self.decisions.iter() {
-    //                     print!("{:#?} ", va.handle);
-    //                 }
-    //             }
-    //             return Clause::new(clause);
+    //             return clause;
     //         }
 
     //         let literal = literal_queue.remove(0);
     //         visited_list.push(literal.handle);
-    //         if self.variable_decision_levels[literal.handle] == latest_decision_level {
-    //             if literal.handle == variable_assignment.handle {
-    //                 clause.push(literal);
-    //             }
-    //             match self.antecedents[literal.handle] {
-    //                 None => (),
-    //                 Some(antecedent) => {
-    //                     let antecedent_clause =
-    //                         &mut self.clauses.get(&antecedent).unwrap().literals.clone();
-    //                     literal_queue.append(
-    //                         &mut antecedent_clause
-    //                             .iter()
-    //                             .filter(|&&l| !visited_list.contains(&l.handle))
-    //                             .map(|&l| l)
-    //                             .collect::<Vec<_>>(),
-    //                     );
+    //         match self.antecedents[literal.handle] {
+    //             None => (),
+    //             Some(slot_key) => {
+    //                 let antecedent = &mut self.clauses.get(&slot_key).unwrap().literals.clone();
+    //                 literal_queue.append(
+    //                     &mut antecedent
+    //                         .iter()
+    //                         .filter(|&l| {
+    //                             self.variable_decision_levels[l.handle] == latest_decision_level
+    //                         })
+    //                         .filter(|&&l| !visited_list.contains(&l.handle))
+    //                         .map(|&l| l)
+    //                         .collect::<Vec<_>>(),
+    //                 );
+    //                 match resolve(&clause, &self.clauses.get(&slot_key).unwrap()) {
+    //                     None => (),
+    //                     Some(resolvent) => {
+    //                         if clause == resolvent {
+    //                             return clause;
+    //                         }
+    //                         clause = resolvent;
+    //                     }
     //                 }
     //             }
-    //         } else {
-    //             clause.push(literal);
     //         }
     //     }
     // }
-
-    fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
-        let mut clause = self.clauses.get(&clause_index).unwrap().clone();
-
-        let latest_decision_level = *self.decision_levels.last().unwrap();
-
-        let mut literal_queue = clause
-            .literals
-            .clone()
-            .iter()
-            .filter(|&l| self.variable_decision_levels[l.handle] == latest_decision_level)
-            .map(|&l| l)
-            .collect::<Vec<_>>();
-        let mut visited_list = vec![];
-
-        loop {
-            if literal_queue.is_empty() {
-                return clause;
-            }
-
-            let literal = literal_queue.remove(0);
-            visited_list.push(literal.handle);
-            match self.antecedents[literal.handle] {
-                None => (),
-                Some(slot_key) => {
-                    let antecedent = &mut self.clauses.get(&slot_key).unwrap().literals.clone();
-                    literal_queue.append(
-                        &mut antecedent
-                            .iter()
-                            .filter(|&l| {
-                                self.variable_decision_levels[l.handle] == latest_decision_level
-                            })
-                            .filter(|&&l| !visited_list.contains(&l.handle))
-                            .map(|&l| l)
-                            .collect::<Vec<_>>(),
-                    );
-                    match resolve(&clause, &self.clauses.get(&slot_key).unwrap()) {
-                        None => (),
-                        Some(resolvent) => {
-                            if clause == resolvent {
-                                return clause;
-                            }
-                            clause = resolvent;
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     fn learn_clause(&mut self, c: ClauseIndex) {
         let learned_clause = self.conflict_analysis(c);
