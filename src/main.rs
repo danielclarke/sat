@@ -6,6 +6,10 @@ use std::path::Path;
 
 use festival_scheduler::Scheduler;
 
+mod adjaceny_list;
+mod fixed_size_stack;
+mod slot_map;
+
 mod festival_scheduler;
 mod master_key;
 mod master_key_2;
