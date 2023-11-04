@@ -1,6 +1,7 @@
 use std::fmt;
 
-use crate::solver::{self, Solution};
+use crate::solver::{self, Solution, SolutionError};
+use crate::utils::read_lines;
 
 const ROWS: usize = 9;
 const COLUMNS: usize = 9;
@@ -188,5 +189,56 @@ impl fmt::Display for Board {
         }
 
         write!(f, "{}", result)
+    }
+}
+
+#[cfg(test)]
+mod test_sudokus {
+    use super::*;
+    use std::error::Error;
+
+    fn test_sudoku_n(n: usize) -> Result<(), Box<dyn Error>> {
+        let mut lines = read_lines("data/sudoku/5_hard_sudokus.txt")?.collect::<Vec<_>>();
+        let sudoku = lines.swap_remove(n)?;
+        let board = Board::from_string(sudoku);
+        println!("Sudoku: {}", n);
+        println!("{}", board);
+
+        let mut solver = Solver::new(board);
+        match solver.solve() {
+            Some(solution) => print!("{}", solution),
+            None => {
+                print!("Sudoku not solvable!");
+                return Err(Box::new(SolutionError::UnSat));
+            }
+        }
+
+        println!();
+        return Ok(());
+    }
+
+    #[test]
+    fn test_sudoku_0() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(0)
+    }
+
+    #[test]
+    fn test_sudoku_1() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(1)
+    }
+
+    #[test]
+    fn test_sudoku_2() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(2)
+    }
+
+    #[test]
+    fn test_sudoku_3() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(3)
+    }
+
+    #[test]
+    fn test_sudoku_4() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(4)
     }
 }

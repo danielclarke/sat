@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use std::error;
-use std::fmt;
-use std::fs::File;
-use std::io::{self, BufRead};
 use std::path::Path;
+use std::{error, fmt};
 
 use crate::solver::{self, Solution, Value, Variable};
+use crate::utils::read_lines;
 
 #[derive(Debug, Clone)]
 enum DataError {
@@ -37,14 +35,6 @@ impl fmt::Display for DataError {
 impl error::Error for DataError {}
 
 type Indices = (usize, usize, usize);
-
-fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
-where
-    P: AsRef<Path>,
-{
-    let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
-}
 
 pub struct LockSheet {
     locks: Vec<Vec<bool>>,

@@ -1,4 +1,5 @@
 use std::ops::Not;
+use std::{error, fmt};
 
 use crate::fixed_size_stack::FixedSizeStack;
 use crate::slot_map::{SlotKey, SlotMap};
@@ -943,6 +944,21 @@ impl Solver {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum SolutionError {
+    UnSat,
+}
+
+impl fmt::Display for SolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            SolutionError::UnSat => write!(f, "Solution unsatisfiable"),
+        }
+    }
+}
+
+impl error::Error for SolutionError {}
 
 #[cfg(test)]
 mod test_resolution {

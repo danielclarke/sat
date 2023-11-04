@@ -6,9 +6,12 @@ use std::path::Path;
 
 use festival_scheduler::Scheduler;
 
+use utils::read_lines;
+
 mod adjaceny_list;
 mod fixed_size_stack;
 mod slot_map;
+mod utils;
 
 mod festival_scheduler;
 mod master_key;
@@ -17,17 +20,9 @@ mod solver;
 mod sudoku;
 mod sudoku_2;
 
-fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
-where
-    P: AsRef<Path>,
-{
-    let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
-}
-
 fn main() {
-    let mut scheduler = Scheduler::new();
-    scheduler.solve();
+    // let mut scheduler = Scheduler::new();
+    // scheduler.solve();
 
     let lines = if let Ok(lines) = read_lines("data/sudoku/5_hard_sudokus.txt") {
         lines
@@ -44,7 +39,7 @@ fn main() {
                 let mut solver = sudoku_2::Solver::new(board);
                 match solver.solve() {
                     Some(solution) => print!("{}", solution),
-                    None => unreachable!("Sudoku should be solvable!"),
+                    None => print!("Sudoku not solvable!"),
                 }
 
                 println!();
