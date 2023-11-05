@@ -198,7 +198,7 @@ mod test_sudokus {
     use std::error::Error;
 
     fn test_sudoku_n(n: usize) -> Result<(), Box<dyn Error>> {
-        let mut lines = read_lines("data/sudoku/5_hard_sudokus.txt")?.collect::<Vec<_>>();
+        let mut lines = read_lines("data/sudoku/95_hard_sudokus.txt")?.collect::<Vec<_>>();
         let sudoku = lines.swap_remove(n)?;
         let board = Board::from_string(sudoku);
         println!("Sudoku: {}", n);
@@ -240,5 +240,13 @@ mod test_sudokus {
     #[test]
     fn test_sudoku_4() -> Result<(), Box<dyn Error>> {
         test_sudoku_n(4)
+    }
+
+    #[test]
+    fn test_sudoku_all() -> Result<(), Box<dyn Error>> {
+        for i in 0..95 {
+            test_sudoku_n(i)?;
+        }
+        Ok(())
     }
 }

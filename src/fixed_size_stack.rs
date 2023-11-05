@@ -46,6 +46,10 @@ where
         self.top
     }
 
+    pub fn empty(&self) -> bool {
+        self.top == 0
+    }
+
     pub fn iter(&self) -> StackIterator<T> {
         StackIterator {
             stack: self,

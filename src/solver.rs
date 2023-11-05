@@ -272,7 +272,7 @@ impl Solver {
                 if literal.value(self.values[literal.handle]) == Value::Unknown {
                     self.antecedents[literal.handle] = Some(slot_key);
                     let dl = self.decision_levels.last().map_or(Some(0), |&dl| dl);
-                    println!("BCP {:#?} {:#?}", literal.handle, dl.unwrap());
+                    // println!("BCP {:#?} {:#?}", literal.handle, dl);
                     return Some((
                         dl,
                         VariableAssignment::new(literal.handle, literal.polarity),
@@ -306,7 +306,7 @@ impl Solver {
                             .last()
                             .map_or(Some(0), |&dl| dl.and_then(|dl| Some(dl + 1)));
 
-                        println!("Unit Clause {:#?} {:#?}", literal.handle, dl.unwrap());
+                        // println!("Unit Clause {:#?} {:#?}", literal.handle, dl.unwrap());
                         return Some((
                             dl,
                             VariableAssignment::new(literal.handle, literal.polarity),
@@ -367,7 +367,7 @@ impl Solver {
                     match polarity {
                         None => (),
                         Some(polarity) => {
-                            println!("Polarity {}", v);
+                            // println!("Polarity {}", v);
                             return Some((
                                 self.decision_levels
                                     .last()
@@ -382,7 +382,7 @@ impl Solver {
 
         // smallest clause
         handle.map(|handle| {
-            println!("Smallest clause {}", handle);
+            // println!("Smallest clause {}", handle);
             (
                 self.decision_levels
                     .last()
@@ -432,7 +432,7 @@ impl Solver {
         println!();
     }
 
-    fn reassign_watched_literal(&mut self) -> Solution {
+    fn reassign_watched_literal(&mut self) -> Result<(), DecisionLevel> {
         if let Some(&va) = self.decisions.last() {
             let false_literal_clauses = match va.values[va.index] {
                 Value::True => &self.negative_literal_clauses[va.handle],
@@ -454,8 +454,8 @@ impl Solver {
                 match self.clause_length(self.clauses.get(&slot_key).unwrap()) {
                     0 => {
                         if self.eval_clause(self.clauses.get(&slot_key).unwrap()) == Value::False {
-                            self.learn_clause(slot_key);
-                            return Solution::UnSat;
+                            return Err(self.learn_clause(slot_key));
+                            // return Solution::UnSat;
                         }
                     }
                     1 => {
@@ -480,7 +480,7 @@ impl Solver {
                 }
             }
         }
-        Solution::Unknown
+        Ok(())
     }
 
     fn check_satisfiability(&self) -> Solution {
@@ -508,46 +508,40 @@ impl Solver {
         ))
     }
 
-    fn backtrack(&mut self) -> Solution {
+    fn backtrack(&mut self, backtrack_decision_level: DecisionLevel) -> Solution {
         self.unit_clauses.clear();
 
-        let prior_decision_level = self.decision_levels.last().and_then(|&dl| dl);
+        let mut backtrack_decision_level_ = backtrack_decision_level;
 
-        let (decision_level, variable_assignment) = 'backtrack: loop {
-            let (decision_level, variable_assignment) = if let Some(var) = self.backtrack_once() {
-                var
-            } else {
-                // all variables exhausted
-                println!("All backtrack variables exhausted, decision_level");
-                return Solution::UnSat;
-            };
+        let (decision_level, variable_assignment) = 'assignment: loop {
+            // println!("Backtracking to {:#?}", backtrack_decision_level);
 
-            // go to the first decision with the same decision level
-            if self.decision_levels.last().and_then(|&dl| dl) != prior_decision_level
-                || self.decision_levels.len() == 0
-            {
-                break 'backtrack (decision_level, variable_assignment);
-            } else {
-                self.antecedents[variable_assignment.handle] = None;
-            }
-        };
-
-        let (decision_level, variable_assignment) = if variable_assignment.index == 0 {
-            (decision_level, variable_assignment)
-        } else {
-            'backtrack: loop {
+            let (decision_level, variable_assignment) = 'backtrack: loop {
                 let (decision_level, variable_assignment) = if let Some(var) = self.backtrack_once()
                 {
                     var
                 } else {
                     // all variables exhausted
-                    println!("All backtrack variables exhausted, other assignment");
+                    // println!("All backtrack variables exhausted, decision_level");
                     return Solution::UnSat;
                 };
 
-                if variable_assignment.index == 0 {
+                if decision_level == backtrack_decision_level_
+                    && (self.decision_levels.empty()
+                        || self.decision_levels.last().and_then(|&dl| dl)
+                            != backtrack_decision_level_)
+                {
                     break 'backtrack (decision_level, variable_assignment);
+                } else {
+                    self.antecedents[variable_assignment.handle] = None;
                 }
+            };
+
+            if variable_assignment.index == 0 {
+                break 'assignment (decision_level, variable_assignment);
+            } else {
+                backtrack_decision_level_ =
+                    decision_level.and_then(|dl| if dl == 0 { Some(dl) } else { Some(dl - 1) });
             }
         };
 
@@ -561,71 +555,71 @@ impl Solver {
         self.decision_levels.push(decision_level);
         self.variable_decision_levels[variable_assignment.handle] = decision_level;
 
-        println!("Backtracked to {}", variable_assignment.handle);
+        // println!(
+        //     "Backtracked to {} {:#?}",
+        //     variable_assignment.handle, decision_level
+        // );
         Solution::Unknown
+
+        // let prior_decision_level = self.decision_levels.last().and_then(|&dl| dl);
+
+        // let (decision_level, variable_assignment) = 'backtrack: loop {
+        //     let (decision_level, variable_assignment) = if let Some(var) = self.backtrack_once() {
+        //         var
+        //     } else {
+        //         // all variables exhausted
+        //         println!("All backtrack variables exhausted, decision_level");
+        //         return Solution::UnSat;
+        //     };
+
+        //     // go to the first decision with the same decision level
+        //     if self.decision_levels.last().and_then(|&dl| dl) != prior_decision_level
+        //         || self.decision_levels.len() == 0
+        //     {
+        //         break 'backtrack (decision_level, variable_assignment);
+        //     } else {
+        //         self.antecedents[variable_assignment.handle] = None;
+        //     }
+        // };
+
+        // let (decision_level, variable_assignment) = if variable_assignment.index == 0 {
+        //     (decision_level, variable_assignment)
+        // } else {
+        //     'backtrack: loop {
+        //         let (decision_level, variable_assignment) = if let Some(var) = self.backtrack_once()
+        //         {
+        //             var
+        //         } else {
+        //             // all variables exhausted
+        //             println!("All backtrack variables exhausted, other assignment");
+        //             return Solution::UnSat;
+        //         };
+
+        //         if variable_assignment.index == 0 {
+        //             break 'backtrack (decision_level, variable_assignment);
+        //         }
+        //     }
+        // };
+
+        // // reached a variable with a remaining assignment, try the other truth value
+        // self.values[variable_assignment.handle] = variable_assignment.values[1];
+        // // push it back onto the top of the stack
+        // self.decisions.push(VariableAssignment {
+        //     index: 1,
+        //     ..variable_assignment
+        // });
+        // self.decision_levels.push(decision_level);
+        // self.variable_decision_levels[variable_assignment.handle] = decision_level;
+
+        // println!("Backtracked to {}", variable_assignment.handle);
+        // Solution::Unknown
     }
 
     fn get_most_recent_decision_assignment(&self) -> Option<VariableAssignment> {
         let mut variable_assignment: Option<VariableAssignment> = None;
         let decision_level = *self.decision_levels.last()?;
-        // println!(
-        //     "Decision level {} {} {}",
-        //     decision_level.unwrap(),
-        //     self.decision_levels.len(),
-        //     self.decisions.len()
-        // );
-        // for va in self.decisions.iter() {
-        //     match self.variable_decision_levels[va.handle] {
-        //         Some(decision_level) => {
-        //             print!("{} ", decision_level);
-        //         }
-        //         None => print!("None "),
-        //     }
-        // }
-        // println!();
-        // for &dl in self.decision_levels.iter() {
-        //     match dl {
-        //         Some(decision_level) => {
-        //             print!("{} ", decision_level);
-        //         }
-        //         None => print!("None "),
-        //     }
-        // }
-        // println!();
 
         for va in self.decisions.iter() {
-            // match decision_level {
-            //     Some(decision_level) => {
-            //         println!("Decision level {}", decision_level);
-            //     }
-            //     None => println!("Decision level None"),
-            // }
-
-            // match self.variable_decision_levels[va.handle] {
-            //     Some(decision_level) => {
-            //         println!("VA Decision level {}", decision_level);
-            //     }
-            //     None => println!("VA Decision level None"),
-            // }
-
-            // match variable_assignment {
-            //     Some(variable_assignment) => {
-            //         println!("Variable assignment handle {}", variable_assignment.handle);
-            //     }
-            //     None => {
-            //         println!("Variable assignment None");
-            //     }
-            // }
-
-            // println!("va {}", va.handle);
-
-            // match self.variable_decision_levels[va.handle] {
-            //     Some(decision_level) => {
-            //         println!("Variable decision level {}", decision_level);
-            //     }
-            //     None => println!("Variable decision level None"),
-            // }
-
             if self.variable_decision_levels[va.handle] == decision_level {
                 variable_assignment = Some(*va);
             } else {
@@ -644,67 +638,67 @@ impl Solver {
 
         let mut literal_queue = self.clauses.get(&clause_index).unwrap().literals.clone();
         let mut visited_list = vec![];
-        println!("--------------------------------");
-        print!("Conflict clause {} ", clause_index);
-        self.print_clause(self.clauses.get(&clause_index).unwrap());
-        println!("latest_decision_level {}", latest_decision_level.unwrap());
-        println!("latest_decision {}", latest_decision.handle);
+        // println!("--------------------------------");
+        // print!("Conflict clause {} ", clause_index);
+        // self.print_clause(self.clauses.get(&clause_index).unwrap());
+        // println!("latest_decision_level {}", latest_decision_level.unwrap());
+        // println!("latest_decision {}", latest_decision.handle);
 
-        println!("decision levels");
-        for &dl in self.decision_levels.iter() {
-            match dl {
-                Some(decision_level) => {
-                    print!("{} ", decision_level);
-                }
-                None => print!("None "),
-            }
-        }
-        println!();
+        // println!("decision levels");
+        // for &dl in self.decision_levels.iter() {
+        //     match dl {
+        //         Some(decision_level) => {
+        //             print!("{} ", decision_level);
+        //         }
+        //         None => print!("None "),
+        //     }
+        // }
+        // println!();
 
-        println!("va decision levels");
-        for va in self.decisions.iter() {
-            match self.variable_decision_levels[va.handle] {
-                Some(decision_level) => {
-                    print!("{} ", decision_level);
-                }
-                None => print!("None "),
-            }
-        }
-        println!();
+        // println!("va decision levels");
+        // for va in self.decisions.iter() {
+        //     match self.variable_decision_levels[va.handle] {
+        //         Some(decision_level) => {
+        //             print!("{} ", decision_level);
+        //         }
+        //         None => print!("None "),
+        //     }
+        // }
+        // println!();
 
-        println!("va value");
-        for va in self.decisions.iter() {
-            match va.values[va.index] {
-                Value::True => print!("1 "),
-                Value::False => print!("0 "),
-                Value::Unknown => (),
-            }
-        }
-        println!();
+        // println!("va value");
+        // for va in self.decisions.iter() {
+        //     match va.values[va.index] {
+        //         Value::True => print!("1 "),
+        //         Value::False => print!("0 "),
+        //         Value::Unknown => (),
+        //     }
+        // }
+        // println!();
 
-        println!("va index");
-        for va in self.decisions.iter() {
-            print!("{} ", va.index)
-        }
-        println!();
+        // println!("va index");
+        // for va in self.decisions.iter() {
+        //     print!("{} ", va.index)
+        // }
+        // println!();
 
-        for va in self.decisions.iter() {
-            print!("{} ", va.handle);
-        }
-        println!();
+        // for va in self.decisions.iter() {
+        //     print!("{} ", va.handle);
+        // }
+        // println!();
 
-        for va in self.decisions.iter() {
-            match self.antecedents[va.handle] {
-                None => println!("antecedent {} None", va.handle),
-                Some(antecedent) => {
-                    // println!("antecedent {} {:#?}", va.handle, antecedent);
-                    print!("antecedent {} ", va.handle);
-                    self.print_clause(self.clauses.get(&antecedent).unwrap());
-                }
-            }
-            // println!("DL {} {:#?}", handle, self.variable_decision_levels[handle]);
-            // println!("DV {:#?}", handle == latest_decision.handle);
-        }
+        // for va in self.decisions.iter() {
+        //     match self.antecedents[va.handle] {
+        //         None => println!("antecedent {} None", va.handle),
+        //         Some(antecedent) => {
+        //             // println!("antecedent {} {:#?}", va.handle, antecedent);
+        //             print!("antecedent {} ", va.handle);
+        //             self.print_clause(self.clauses.get(&antecedent).unwrap());
+        //         }
+        //     }
+        //     // println!("DL {} {:#?}", handle, self.variable_decision_levels[handle]);
+        //     // println!("DV {:#?}", handle == latest_decision.handle);
+        // }
 
         loop {
             if literal_queue.is_empty() {
@@ -758,11 +752,11 @@ impl Solver {
                 //     }
                 // }
 
-                println!("--------------------------------");
+                // println!("--------------------------------");
                 return Clause::new(clause);
             }
 
-            println!("  ------------------------------");
+            // println!("  ------------------------------");
 
             let literal = literal_queue.remove(0);
             visited_list.push(literal.handle);
@@ -839,11 +833,11 @@ impl Solver {
     //     }
     // }
 
-    fn learn_clause(&mut self, c: ClauseIndex) {
+    fn learn_clause(&mut self, c: ClauseIndex) -> DecisionLevel {
         let learned_clause = self.conflict_analysis(c);
 
-        self.print_clause(&learned_clause);
-        println!();
+        // self.print_clause(&learned_clause);
+        // println!();
 
         // println!("--------------------------------");
         // self.print_clause(&learned_clause);
@@ -870,15 +864,15 @@ impl Solver {
                         == *self.decision_levels.last().unwrap()
                 }) {
                     None => {
-                        self.print_clause(&learned_clause);
-                        println!(
-                            "{:#?}",
-                            learned_clause
-                                .iter()
-                                .map(|&literal| self.variable_decision_levels[literal.handle])
-                                .collect::<Vec<_>>()
-                        );
-                        println!("DL: {:#?}", self.decision_levels.last().unwrap().unwrap());
+                        // self.print_clause(&learned_clause);
+                        // println!(
+                        //     "{:#?}",
+                        //     learned_clause
+                        //         .iter()
+                        //         .map(|&literal| self.variable_decision_levels[literal.handle])
+                        //         .collect::<Vec<_>>()
+                        // );
+                        // println!("DL: {:#?}", self.decision_levels.last().unwrap().unwrap());
                         watched_literals[1]
                         // unreachable!("Learned clause does not contain decision variable");
                     }
@@ -888,6 +882,19 @@ impl Solver {
             watched_literals
         };
         self.watched_literals.insert(watched_literals);
+
+        // let mut decision_level = learned_clause
+        //     .iter()
+        //     .map(|&l| self.variable_decision_levels[l.handle])
+        //     .filter(|dl| dl.is_some())
+        //     .map(|dl| dl.unwrap())
+        //     .collect::<Vec<_>>();
+        // decision_level.sort();
+        // decision_level.reverse();
+        // let decision_level = decision_level.get(0).map_or(Some(0), |&dl| Some(dl));
+
+        let decision_level = *self.decision_levels.last().unwrap();
+
         let slot_key = self.clauses.insert(learned_clause);
         for literal in self.clauses.get(&slot_key).unwrap().iter() {
             if literal.polarity {
@@ -897,6 +904,8 @@ impl Solver {
             }
             self.variable_clauses[literal.handle].push(slot_key);
         }
+
+        decision_level
         // a learned clause should have length = 1 after backtrack
         // backtracking which occurs after this will clear the stack anyway
         // if self.clause_length(&self.clauses.get(&slot_key).unwrap()) == 1 {
@@ -953,17 +962,34 @@ impl Solver {
             self.clauses.len()
         );
 
-        let (decision_level, unassigned) = if let Some(var) = self.next_unassigned() {
-            var
-        } else {
-            println!("All variables assigned!");
-            return Solution::Sat;
-        };
+        let unit_clause_slot_keys = self
+            .clauses
+            .iter()
+            .items()
+            .filter(|(_, c)| self.clause_length(c) == 1)
+            .map(|(sk, _)| sk)
+            .collect::<Vec<_>>();
 
-        self.values[unassigned.handle] = unassigned.values[0];
-        self.variable_decision_levels[unassigned.handle] = decision_level;
-        self.decisions.push(unassigned);
-        self.decision_levels.push(decision_level);
+        for slot_key in unit_clause_slot_keys {
+            let clause = self.clauses.get(&slot_key).unwrap();
+            let clause_length = self.clause_length(clause);
+
+            if clause_length == 1 {
+                let literal = &clause[0];
+                self.antecedents[literal.handle] = Some(slot_key);
+                let variable_assignment = VariableAssignment::new(literal.handle, literal.polarity);
+
+                self.values[variable_assignment.handle] = variable_assignment.values[0];
+                self.variable_decision_levels[variable_assignment.handle] = Some(0);
+                self.decisions.push(variable_assignment);
+                self.decision_levels.push(Some(0));
+            }
+
+            match self.reassign_watched_literal() {
+                Err(_) => return Solution::UnSat,
+                Ok(_) => (),
+            }
+        }
 
         let mut i = 0;
         loop {
@@ -985,17 +1011,9 @@ impl Solver {
                     self.decision_levels.last().and_then(|&dl| dl)
                 );
             }
+
             match self.reassign_watched_literal() {
-                Solution::Sat => {
-                    println!("Solved in Iterations: {}", i);
-                    return Solution::Sat;
-                }
-                Solution::UnSat => match self.backtrack() {
-                    Solution::Sat => unreachable!("Backtrack found a solution"),
-                    Solution::UnSat => return Solution::UnSat,
-                    Solution::Unknown => (),
-                },
-                Solution::Unknown => {
+                Ok(_) => {
                     if let Some((decision_level, var)) = self.next_unassigned() {
                         self.values[var.handle] = var.values[0];
                         self.variable_decision_levels[var.handle] = decision_level;
@@ -1012,6 +1030,11 @@ impl Solver {
                         }
                     };
                 }
+                Err(decision_level) => match self.backtrack(decision_level) {
+                    Solution::Sat => unreachable!("Backtrack found a solution"),
+                    Solution::UnSat => return Solution::UnSat,
+                    Solution::Unknown => (),
+                },
             }
         }
     }
