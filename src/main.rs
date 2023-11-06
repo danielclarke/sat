@@ -24,7 +24,7 @@ fn main() {
     let mut scheduler = Scheduler::new();
     scheduler.solve();
 
-    let lines = if let Ok(lines) = read_lines("data/sudoku/5_hard_sudokus.txt") {
+    let lines = if let Ok(lines) = read_lines("data/sudoku/95_hard_sudokus.txt") {
         lines
     } else {
         return;

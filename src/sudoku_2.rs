@@ -26,6 +26,40 @@ impl Board {
         }
         Board { board }
     }
+
+    pub fn is_valid(&self) -> bool {
+        for i in 0..8 {
+            for c in 0..8 {
+                match &self.board[i][..].iter().find(|&&v| v == Some(c)) {
+                    None => return false,
+                    Some(_) => (),
+                }
+                match &self.board[..][i].iter().find(|&&v| v == Some(c)) {
+                    None => return false,
+                    Some(_) => (),
+                }
+            }
+        }
+
+        for r in (0..ROWS).step_by(BOXES) {
+            for c in (0..COLUMNS).step_by(BOXES) {
+                let mut values = vec![];
+                for rr in 0..BOXES {
+                    for cc in 0..BOXES {
+                        values.push(self.board[r + rr][c + cc]);
+                    }
+                }
+                for c in 0..VALUES {
+                    match &values.iter().find(|&&v| v == Some(c as u32)) {
+                        None => return false,
+                        Some(_) => (),
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
 }
 
 pub struct Solver {
@@ -77,6 +111,7 @@ impl Solver {
                         }
                     }
                 }
+                assert_eq!(board.is_valid(), true);
                 Some(board)
             }
             Solution::UnSat => None,
