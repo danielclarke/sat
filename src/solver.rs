@@ -603,11 +603,14 @@ impl Solver {
 
         // reached a variable with a remaining assignment, try the other truth value
         self.values[variable_assignment.handle] = variable_assignment.values[1];
+        // self.values[variable_assignment.handle] =
+        //     variable_assignment.values[variable_assignment.index];
         // push it back onto the top of the stack
         self.decisions.push(VariableAssignment {
             index: 1,
             ..variable_assignment
         });
+        // self.decisions.push(variable_assignment);
         self.decision_levels.push(decision_level);
         self.variable_decision_levels[variable_assignment.handle] = Some(decision_level);
 
@@ -824,12 +827,8 @@ impl Solver {
 
         let mut i = 0;
         loop {
-            if self.decisions.len() != self.decision_levels.len() {
-                unreachable!(
-                    "Decision misalignment! decisions: {}, decision levels: {}",
-                    self.decisions.len(),
-                    self.decision_levels.len()
-                );
+            if cfg!(debug_assertions) {
+                self.assert_invariances();
             }
 
             i += 1;
@@ -867,6 +866,29 @@ impl Solver {
                     Solution::Unknown => (),
                 },
             }
+        }
+    }
+
+    fn assert_invariances(&self) {
+        if self.decisions.len() != self.decision_levels.len() {
+            unreachable!(
+                "Decision misalignment! decisions: {}, decision levels: {}",
+                self.decisions.len(),
+                self.decision_levels.len()
+            );
+        }
+
+        let mut dl_iter = self.decision_levels.iter();
+        match dl_iter.next() {
+            Some(mut dl) => {
+                for dl_ in dl_iter {
+                    if dl < dl_ {
+                        unreachable!("Decision levels out of order! Decision level {} is a more recent decision than {}", dl, dl_);
+                    }
+                    dl = dl_;
+                }
+            }
+            None => (),
         }
     }
 }
