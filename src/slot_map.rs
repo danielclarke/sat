@@ -156,17 +156,17 @@ impl<'a, T> Iterator for SlotMapEnumerator<'a, T> {
         let n = self.slot_map_iterator.next();
 
         match n {
-            None => return None,
+            None => None,
             Some(v) => {
                 let generation =
                     self.slot_map_iterator.slot_map.generations[self.slot_map_iterator.index - 1];
-                return Some((
+                Some((
                     SlotKey {
                         index: self.slot_map_iterator.index - 1,
                         generation,
                     },
                     v,
-                ));
+                ))
             }
         }
     }

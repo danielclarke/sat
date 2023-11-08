@@ -1,6 +1,6 @@
-extern crate minisat;
-
 use std::fmt;
+
+use crate::solver::{self, Solution};
 
 const ROWS: usize = 9;
 const COLUMNS: usize = 9;
@@ -25,19 +25,53 @@ impl Board {
         }
         Board { board }
     }
+
+    pub fn is_valid(&self) -> bool {
+        for i in 0..8 {
+            for c in 0..8 {
+                match &self.board[i][..].iter().find(|&&v| v == Some(c)) {
+                    None => return false,
+                    Some(_) => (),
+                }
+                match &self.board[..][i].iter().find(|&&v| v == Some(c)) {
+                    None => return false,
+                    Some(_) => (),
+                }
+            }
+        }
+
+        for r in (0..ROWS).step_by(BOXES) {
+            for c in (0..COLUMNS).step_by(BOXES) {
+                let mut values = vec![];
+                for rr in 0..BOXES {
+                    for cc in 0..BOXES {
+                        values.push(self.board[r + rr][c + cc]);
+                    }
+                }
+                for c in 0..VALUES {
+                    match &values.iter().find(|&&v| v == Some(c as u32)) {
+                        None => return false,
+                        Some(_) => (),
+                    }
+                }
+            }
+        }
+
+        true
+    }
 }
 
 pub struct Solver {
     board: Board,
-    solver: minisat::Solver,
-    vars: Vec<minisat::Bool>,
+    formula: solver::Formula,
+    vars: Vec<solver::Variable>,
 }
 
 impl Solver {
     pub fn new(board: Board) -> Solver {
         Solver {
             board,
-            solver: minisat::Solver::new(),
+            formula: solver::Formula::new(),
             vars: vec![],
         }
     }
@@ -46,7 +80,7 @@ impl Solver {
         for _r in 0..ROWS {
             for _c in 0..COLUMNS {
                 for _v in 0..VALUES {
-                    self.vars.push(self.solver.new_lit());
+                    self.vars.push(self.formula.add_var());
                 }
             }
         }
@@ -60,43 +94,51 @@ impl Solver {
         self.one_square_one_value();
         self.apply_board();
 
-        if let Ok(solution) = self.solver.solve() {
-            let mut board = Board::new(ROWS, COLUMNS);
-            for r in 0..ROWS {
-                for c in 0..COLUMNS {
-                    for v in 0..VALUES {
-                        if solution.value(&self.vars[r * COLUMNS * VALUES + c * VALUES + v]) {
-                            board.board[r][c] = Some(v as u32);
+        let mut solver = solver::Solver::new(self.formula.clone());
+
+        match solver.solve() {
+            Solution::Sat => {
+                let mut board = Board::new(ROWS, COLUMNS);
+                for r in 0..ROWS {
+                    for c in 0..COLUMNS {
+                        for v in 0..VALUES {
+                            if solver.value(&self.vars[r * COLUMNS * VALUES + c * VALUES + v])
+                                == solver::Value::True
+                            {
+                                board.board[r][c] = Some(v as u32);
+                            }
                         }
                     }
                 }
+                assert!(board.is_valid());
+                Some(board)
             }
-
-            Some(board)
-        } else {
-            None
+            Solution::UnSat => None,
+            Solution::Unknown => None,
         }
     }
 
-    fn get_var(&self, row: usize, column: usize, value: usize) -> minisat::Bool {
+    fn get_var(&self, row: usize, column: usize, value: usize) -> solver::Variable {
         self.vars[row * COLUMNS * VALUES + column * VALUES + value]
     }
 
-    fn exactly_one_true(&mut self, literals: Vec<minisat::Bool>) {
-        for i in 0..literals.len() {
-            for j in i + 1..literals.len() {
-                self.solver.add_clause(vec![!literals[i], !literals[j]]);
+    fn exactly_one_true(&mut self, variables: Vec<solver::Variable>) {
+        for i in 0..variables.len() {
+            for j in i + 1..variables.len() {
+                self.formula
+                    .add_clause(vec![!variables[i].literal(), !variables[j].literal()]);
             }
         }
-        self.solver.add_clause(literals);
+        self.formula
+            .add_clause(variables.iter().map(|v| v.literal()).collect());
     }
 
     pub fn apply_board(&mut self) {
         for r in 0..ROWS {
             for c in 0..COLUMNS {
                 if let Some(value) = self.board.board[r][c] {
-                    self.solver
-                        .add_clause(vec![self.get_var(r, c, value as usize)]);
+                    self.formula
+                        .add_clause(vec![self.get_var(r, c, value as usize).literal()]);
                 }
             }
         }
@@ -105,9 +147,9 @@ impl Solver {
     fn unique_rows(&mut self) {
         for r in 0..ROWS {
             for v in 0..VALUES {
-                let literals: Vec<minisat::Bool> =
+                let variables: Vec<solver::Variable> =
                     (0..COLUMNS).map(|c| self.get_var(r, c, v)).collect();
-                self.exactly_one_true(literals);
+                self.exactly_one_true(variables);
             }
         }
     }
@@ -115,9 +157,9 @@ impl Solver {
     fn unique_columns(&mut self) {
         for c in 0..COLUMNS {
             for v in 0..VALUES {
-                let literals: Vec<minisat::Bool> =
+                let variables: Vec<solver::Variable> =
                     (0..ROWS).map(|r| self.get_var(r, c, v)).collect();
-                self.exactly_one_true(literals);
+                self.exactly_one_true(variables);
             }
         }
     }
@@ -126,13 +168,13 @@ impl Solver {
         for r in (0..ROWS).step_by(BOXES) {
             for c in (0..COLUMNS).step_by(BOXES) {
                 for v in 0..VALUES {
-                    let mut literals = vec![];
+                    let mut variables = vec![];
                     for rr in 0..BOXES {
                         for cc in 0..BOXES {
-                            literals.push(self.get_var(r + rr, c + cc, v));
+                            variables.push(self.get_var(r + rr, c + cc, v));
                         }
                     }
-                    self.exactly_one_true(literals);
+                    self.exactly_one_true(variables);
                 }
             }
         }
@@ -141,9 +183,9 @@ impl Solver {
     fn one_square_one_value(&mut self) {
         for r in 0..ROWS {
             for c in 0..COLUMNS {
-                let literals: Vec<minisat::Bool> =
+                let variables: Vec<solver::Variable> =
                     (0..VALUES).map(|v| self.get_var(r, c, v)).collect();
-                self.exactly_one_true(literals);
+                self.exactly_one_true(variables);
             }
         }
     }
@@ -181,5 +223,66 @@ impl fmt::Display for Board {
         }
 
         write!(f, "{}", result)
+    }
+}
+
+#[cfg(test)]
+mod test_sudokus {
+    use super::*;
+    use crate::read_lines;
+    use crate::solver::SolutionError;
+    use std::error::Error;
+
+    fn test_sudoku_n(n: usize) -> Result<(), Box<dyn Error>> {
+        let mut lines = read_lines("data/sudoku/95_hard_sudokus.txt")?.collect::<Vec<_>>();
+        let sudoku = lines.swap_remove(n)?;
+        let board = Board::from_string(sudoku);
+        println!("Sudoku: {}", n);
+        println!("{}", board);
+
+        let mut solver = Solver::new(board);
+        match solver.solve() {
+            Some(solution) => print!("{}", solution),
+            None => {
+                print!("Sudoku not solvable!");
+                return Err(Box::new(SolutionError::UnSat));
+            }
+        }
+
+        println!();
+        return Ok(());
+    }
+
+    #[test]
+    fn test_sudoku_0() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(0)
+    }
+
+    #[test]
+    fn test_sudoku_1() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(1)
+    }
+
+    #[test]
+    fn test_sudoku_2() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(2)
+    }
+
+    #[test]
+    fn test_sudoku_3() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(3)
+    }
+
+    #[test]
+    fn test_sudoku_4() -> Result<(), Box<dyn Error>> {
+        test_sudoku_n(4)
+    }
+
+    #[test]
+    fn test_sudoku_all() -> Result<(), Box<dyn Error>> {
+        for i in 0..95 {
+            test_sudoku_n(i)?;
+        }
+        Ok(())
     }
 }

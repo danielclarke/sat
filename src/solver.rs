@@ -358,7 +358,7 @@ impl Solver {
                         let dl = self
                             .decision_levels
                             .last()
-                            .map_or(Some(0), |&dl| dl.and_then(|dl| Some(dl + 1)));
+                            .map_or(Some(0), |&dl| dl.map(|dl| dl + 1));
 
                         // println!("Unit Clause {:#?} {:#?}", literal.handle, dl.unwrap());
                         return Some((
@@ -425,7 +425,7 @@ impl Solver {
                             return Some((
                                 self.decision_levels
                                     .last()
-                                    .map_or(Some(0), |&dl| dl.and_then(|dl| Some(dl + 1))),
+                                    .map_or(Some(0), |&dl| dl.map(|dl| dl + 1)),
                                 VariableAssignment::new(v, polarity),
                             ));
                         }
@@ -440,7 +440,7 @@ impl Solver {
             (
                 self.decision_levels
                     .last()
-                    .map_or(Some(0), |&dl| dl.and_then(|dl| Some(dl + 1))),
+                    .map_or(Some(0), |&dl| dl.map(|dl| dl + 1)),
                 VariableAssignment::new(handle, false),
             )
         })
@@ -594,7 +594,7 @@ impl Solver {
                 break 'assignment (decision_level, variable_assignment);
             } else {
                 backtrack_decision_level_ =
-                    decision_level.and_then(|dl| if dl == 0 { Some(dl) } else { Some(dl - 1) });
+                    decision_level.map(|dl| if dl == 0 { dl } else { dl - 1 });
             }
         };
 
@@ -655,7 +655,7 @@ impl Solver {
                             &mut antecedent_clause
                                 .iter()
                                 .filter(|&&l| !visited_list.contains(&l.handle))
-                                .map(|&l| l)
+                                .copied()
                                 .collect::<Vec<_>>(),
                         );
                     }
@@ -1016,8 +1016,6 @@ mod test_resolution {
 
 #[cfg(test)]
 mod test_clause_learning {
-    use crate::solver;
-
     use super::*;
     use std::error::Error;
 

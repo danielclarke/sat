@@ -66,7 +66,7 @@ impl<'a, T> Iterator for StackIterator<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index <= 0 {
+        if self.index == 0 {
             None
         } else {
             let result = Some(self.stack.data[self.index - 1].as_ref().unwrap());
