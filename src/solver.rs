@@ -195,6 +195,31 @@ impl VariableAssignment {
     }
 }
 
+#[derive(Clone)]
+pub struct Formula {
+    variables: Option<Vec<Variable>>,
+    clauses: Option<SlotMap<Clause>>,
+}
+
+impl Formula {
+    pub fn new() -> Self {
+        Self {
+            variables: Some(vec![]),
+            clauses: Some(SlotMap::new()),
+        }
+    }
+
+    pub fn add_var(&mut self) -> Variable {
+        let var = Variable::new(self.variables.as_ref().unwrap().len());
+        self.variables.as_mut().unwrap().push(var);
+        var
+    }
+
+    pub fn add_clause(&mut self, literals: Vec<Literal>) -> SlotKey {
+        self.clauses.as_mut().unwrap().insert(Clause::new(literals))
+    }
+}
+
 pub struct Solver {
     // problem
     variables: Vec<Variable>,
@@ -223,31 +248,60 @@ pub struct Solver {
 }
 
 impl Solver {
-    pub fn new() -> Self {
-        Self {
-            variables: vec![],
-            clauses: SlotMap::new(),
-            variable_clauses: vec![],
-            positive_literal_clauses: vec![],
-            negative_literal_clauses: vec![],
-            decisions: FixedSizeStack::new(0),
-            decision_levels: FixedSizeStack::new(0),
-            values: vec![],
-            variable_decision_levels: vec![],
-            antecedents: vec![],
-            watched_literals: SlotMap::new(),
-            unit_clauses: FixedSizeStack::new(0),
+    pub fn new(formula: Formula) -> Self {
+        let mut formula = formula;
+        let num_variables = formula.variables.as_ref().unwrap().len();
+        let num_clauses = formula.clauses.as_ref().unwrap().len();
+        let mut variable_clauses = vec![vec![]; num_variables];
+        let mut positive_literal_clauses = vec![vec![]; num_variables];
+        let mut negative_literal_clauses = vec![vec![]; num_variables];
+
+        for (slot_key, clause) in formula.clauses.as_ref().unwrap().iter().items() {
+            for literal in clause.iter() {
+                variable_clauses[literal.handle].push(slot_key);
+                if literal.polarity {
+                    positive_literal_clauses[literal.handle].push(slot_key);
+                } else {
+                    negative_literal_clauses[literal.handle].push(slot_key);
+                }
+            }
         }
-    }
 
-    pub fn add_var(&mut self) -> Variable {
-        let var = Variable::new(self.variables.len());
-        self.variables.push(var);
-        var
-    }
+        let values = vec![Value::Unknown; num_variables];
+        let variable_decision_levels = vec![None; num_variables];
+        let watched_literals = formula
+            .clauses
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                if c.len() == 1 {
+                    [c[0], c[0]] // unit clauses watch the only literal twice
+                } else {
+                    [c[0], c[1]]
+                }
+            })
+            .collect::<SlotMap<_>>();
 
-    pub fn add_clause(&mut self, literals: Vec<Literal>) -> SlotKey {
-        self.clauses.insert(Clause::new(literals))
+        let decisions = FixedSizeStack::new(num_variables);
+        let decision_levels = FixedSizeStack::new(num_variables);
+        let antecedents = vec![None; num_variables];
+        let unit_clauses = FixedSizeStack::new(num_clauses);
+
+        Self {
+            variables: formula.variables.take().unwrap(),
+            clauses: formula.clauses.take().unwrap(),
+            variable_clauses,
+            positive_literal_clauses,
+            negative_literal_clauses,
+            decisions,
+            decision_levels,
+            values,
+            variable_decision_levels,
+            antecedents,
+            watched_literals,
+            unit_clauses,
+        }
     }
 
     pub fn value(&self, variable: &Variable) -> Value {
@@ -704,49 +758,7 @@ impl Solver {
         // }
     }
 
-    fn init(&mut self) {
-        self.variable_clauses = vec![vec![]; self.variables.len()];
-        self.positive_literal_clauses = vec![vec![]; self.variables.len()];
-        self.negative_literal_clauses = vec![vec![]; self.variables.len()];
-
-        for (slot_key, clause) in self.clauses.iter().items() {
-            for literal in clause.iter() {
-                self.variable_clauses[literal.handle].push(slot_key);
-                if literal.polarity {
-                    self.positive_literal_clauses[literal.handle].push(slot_key);
-                } else {
-                    self.negative_literal_clauses[literal.handle].push(slot_key);
-                }
-            }
-        }
-
-        self.values = vec![Value::Unknown; self.variables.len()];
-        self.variable_decision_levels = vec![None; self.variables.len()];
-        let watched_literals = self
-            .clauses
-            .iter()
-            .map(|c| {
-                if c.len() == 1 {
-                    [c[0], c[0]] // unit clauses watch the only literal twice
-                } else {
-                    [c[0], c[1]]
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for watched_literal in watched_literals {
-            self.watched_literals.insert(watched_literal);
-        }
-
-        self.decisions = FixedSizeStack::new(self.variables.len());
-        self.decision_levels = FixedSizeStack::new(self.variables.len());
-        self.antecedents = vec![None; self.variables.len()];
-        self.unit_clauses = FixedSizeStack::new(self.clauses.len());
-    }
-
     pub fn solve(&mut self) -> Solution {
-        self.init();
-
         println!(
             "Solving for {} variables with {} clauses",
             self.variables.len(),
@@ -1004,28 +1016,30 @@ mod test_resolution {
 
 #[cfg(test)]
 mod test_clause_learning {
+    use crate::solver;
+
     use super::*;
     use std::error::Error;
 
     #[test]
     fn test_clause_learning() -> Result<(), Box<dyn Error>> {
-        let mut solver = Solver::new();
+        let mut formula = Formula::new();
 
-        solver.add_var();
-        let v1 = solver.add_var();
-        let v2 = solver.add_var();
-        let v3 = solver.add_var();
-        let v4 = solver.add_var();
-        let v5 = solver.add_var();
-        let v6 = solver.add_var();
+        formula.add_var();
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+        let v4 = formula.add_var();
+        let v5 = formula.add_var();
+        let v6 = formula.add_var();
         for _ in 7..21 {
-            solver.add_var();
+            formula.add_var();
         }
-        let v21 = solver.add_var();
+        let v21 = formula.add_var();
         for _ in 22..31 {
-            solver.add_var();
+            formula.add_var();
         }
-        let v31 = solver.add_var();
+        let v31 = formula.add_var();
 
         let c1 = vec![v1.literal(), v31.literal(), !v2.literal()];
         let c2 = vec![v1.literal(), !v3.literal()];
@@ -1034,14 +1048,14 @@ mod test_clause_learning {
         let c5 = vec![v21.literal(), !v4.literal(), !v6.literal()];
         let c6 = vec![v5.literal(), v6.literal()];
 
-        let sk1 = solver.add_clause(c1);
-        let sk2 = solver.add_clause(c2);
-        let sk3 = solver.add_clause(c3);
-        let sk4 = solver.add_clause(c4);
-        let sk5 = solver.add_clause(c5);
-        let sk6 = solver.add_clause(c6);
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+        let sk3 = formula.add_clause(c3);
+        let sk4 = formula.add_clause(c4);
+        let sk5 = formula.add_clause(c5);
+        let sk6 = formula.add_clause(c6);
 
-        solver.init();
+        let mut solver = Solver::new(formula);
 
         solver.values[v21.handle] = Value::False;
         solver.variable_decision_levels[v21.handle] = Some(2);

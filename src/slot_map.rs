@@ -13,6 +13,7 @@ impl fmt::Display for SlotKey {
     }
 }
 
+#[derive(Clone)]
 pub struct SlotMap<T> {
     data: Vec<T>,
     generations: Vec<Generation>,
@@ -93,6 +94,21 @@ where
             slot_map: self,
             index: 0,
         }
+    }
+}
+
+impl<T> FromIterator<T> for SlotMap<T>
+where
+    T: Clone,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut c = SlotMap::<T>::new();
+
+        for i in iter {
+            c.insert(i);
+        }
+
+        c
     }
 }
 

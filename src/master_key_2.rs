@@ -184,17 +184,17 @@ pub struct Solver {
     lock_vars: HashMap<Indices, Variable>,
     geometry: Geometry,
     lock_sheet: LockSheet,
-    solver: solver::Solver,
+    formula: solver::Formula,
 }
 
 impl Solver {
-    pub fn new(geometry: Geometry, lock_sheet: LockSheet) -> Solver {
-        Solver {
+    pub fn new(geometry: Geometry, lock_sheet: LockSheet) -> Self {
+        Self {
             key_vars: HashMap::new(),
             lock_vars: HashMap::new(),
             geometry,
             lock_sheet,
-            solver: solver::Solver::new(),
+            formula: solver::Formula::new(),
         }
     }
 
@@ -210,7 +210,9 @@ impl Solver {
             self.add_gecodes(key);
         }
 
-        match self.solver.solve() {
+        let mut solver = solver::Solver::new(self.formula.clone());
+
+        match solver.solve() {
             Solution::Sat => {
                 println!("SOLVED!");
 
@@ -220,7 +222,7 @@ impl Solver {
                         for position in 0..self.geometry.positions {
                             let indices = (position, depth, key);
                             let key_lit = self.key_vars[&indices];
-                            match self.solver.value(&key_lit) {
+                            match solver.value(&key_lit) {
                                 Value::True => print!("{} ", depth),
                                 Value::Unknown => print!("x "),
                                 Value::False => print!(". "),
@@ -237,7 +239,7 @@ impl Solver {
                         for position in 0..self.geometry.positions {
                             let indices = (position, depth, lock);
                             let lock_lit = self.lock_vars[&indices];
-                            if self.solver.value(&lock_lit) == Value::True {
+                            if solver.value(&lock_lit) == Value::True {
                                 print!("{} ", depth);
                             } else {
                                 print!(". ");
@@ -260,11 +262,11 @@ impl Solver {
     fn exactly_one(&mut self, variables: Vec<Variable>) {
         for i in 0..variables.len() {
             for j in i + 1..variables.len() {
-                self.solver
+                self.formula
                     .add_clause(vec![!variables[i].literal(), !variables[j].literal()]);
             }
         }
-        self.solver
+        self.formula
             .add_clause(variables.iter().map(|v| v.literal()).collect());
     }
 
@@ -273,7 +275,7 @@ impl Solver {
         *self
             .key_vars
             .entry(indices)
-            .or_insert(self.solver.add_var())
+            .or_insert(self.formula.add_var())
     }
 
     fn add_lock_var(&mut self, position: usize, depth: usize, lock: usize) -> Variable {
@@ -281,7 +283,7 @@ impl Solver {
         *self
             .lock_vars
             .entry(indices)
-            .or_insert(self.solver.add_var())
+            .or_insert(self.formula.add_var())
     }
 
     fn key_var(&self, position: usize, depth: usize, key: usize) -> Variable {
@@ -300,7 +302,7 @@ impl Solver {
             for depth in 0..self.geometry.depths {
                 variables.push(self.add_lock_var(position, depth, lock));
             }
-            self.solver
+            self.formula
                 .add_clause(variables.iter().map(|v| v.literal()).collect());
         }
     }
@@ -322,7 +324,7 @@ impl Solver {
                     for depth in 0..self.geometry.depths {
                         let key_lit = self.key_var(position, depth, key);
                         let lock_lit = self.lock_var(position, depth, lock);
-                        self.solver
+                        self.formula
                             .add_clause(vec![!key_lit.literal(), lock_lit.literal()]);
                     }
                 }
@@ -337,7 +339,7 @@ impl Solver {
 
                 for position in 0..self.geometry.positions {
                     for depth in 0..self.geometry.depths {
-                        let block_variable = self.solver.add_var();
+                        let block_variable = self.formula.add_var();
                         let key_variable = self.key_var(position, depth, key);
                         let lock_variable = self.lock_var(position, depth, lock);
 
@@ -345,16 +347,16 @@ impl Solver {
                         // 1)   block_{p, d}  => (key_{p, d} && ~lock_{p, d})
                         //     ~block_{p, d}  v  (key_{p, d} && ~lock_{p, d})
                         //    (~block_{p, d} v key_{p, d}) && (~block_{p, d} v ~lock_{p, d})
-                        self.solver
+                        self.formula
                             .add_clause(vec![!block_variable.literal(), key_variable.literal()]);
-                        self.solver
+                        self.formula
                             .add_clause(vec![!block_variable.literal(), !lock_variable.literal()]);
 
                         // 2)   (key_{p, d} && ~lock_{p, d}) => block_{p, d}
                         //     ~(key_{p, d} && ~lock_{p, d}) v  block_{p, d}
                         //     (~key_{p, d} v   lock_{p, d}) v  block_{p, d}
                         //      ~key_{p, d} v   lock_{p, d}  v block_{p, d}
-                        self.solver.add_clause(vec![
+                        self.formula.add_clause(vec![
                             block_variable.literal(),
                             !key_variable.literal(),
                             lock_variable.literal(),
@@ -363,7 +365,7 @@ impl Solver {
                         blocking_variables.push(block_variable);
                     }
                 }
-                self.solver
+                self.formula
                     .add_clause(blocking_variables.iter().map(|v| v.literal()).collect());
             }
         }
@@ -378,7 +380,7 @@ impl Solver {
                     literals.push(!key_variable.literal());
                 }
             }
-            self.solver.add_clause(literals);
+            self.formula.add_clause(literals);
         }
     }
 }

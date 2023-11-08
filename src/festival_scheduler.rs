@@ -37,7 +37,7 @@ pub struct Scheduler {
     artists: Vec<String>,
     venues: Vec<String>,
     events: Vec<Event>,
-    solver: solver::Solver,
+    formula: solver::Formula,
     artist_vars: HashMap<ArtistIndex, Variable>,
     event_vars: HashMap<EventIndex, Variable>,
 }
@@ -59,7 +59,7 @@ impl Scheduler {
                 Event::new(1, vec![2, 3], 8),
                 Event::new(2, vec![0, 1], 8),
             ],
-            solver: solver::Solver::new(),
+            formula: solver::Formula::new(),
             artist_vars: HashMap::new(),
             event_vars: HashMap::new(),
         }
@@ -73,7 +73,7 @@ impl Scheduler {
         *self
             .artist_vars
             .entry(index)
-            .or_insert(self.solver.add_var())
+            .or_insert(self.formula.add_var())
     }
 
     fn add_event_var(&mut self, interval: usize, venue: Venue, event: usize) -> Variable {
@@ -81,7 +81,7 @@ impl Scheduler {
         *self
             .event_vars
             .entry(index)
-            .or_insert(self.solver.add_var())
+            .or_insert(self.formula.add_var())
     }
 
     fn artist_var(&mut self, interval: usize, venue: Venue, artist: Artist) -> Variable {
@@ -138,7 +138,7 @@ impl Scheduler {
                 for artist in self.events[event].artists.clone() {
                     let artist_lit = self.artist_var(interval, venue, artist);
                     let event_lit = self.event_var(interval, venue, event);
-                    self.solver
+                    self.formula
                         .add_clause(vec![!event_lit.literal(), artist_lit.literal()]);
                 }
             }
@@ -169,7 +169,9 @@ impl Scheduler {
 
         self.one_event_per_venue_interval();
 
-        match self.solver.solve() {
+        let mut solver = solver::Solver::new(self.formula.clone());
+
+        match solver.solve() {
             Solution::Sat => {
                 println!("SOLVED!");
 
@@ -178,7 +180,7 @@ impl Scheduler {
                         for event in self.events.iter() {
                             let indices = (interval, venue, event.id);
                             let event_lit = self.event_vars[&indices];
-                            match self.solver.value(&event_lit) {
+                            match solver.value(&event_lit) {
                                 Value::True => println!(
                                     "event: {} interval: {} venue: {}",
                                     event.id, interval, venue
@@ -190,7 +192,7 @@ impl Scheduler {
                         for artist in 0..self.artists.len() {
                             let indices = (interval, venue, artist);
                             let artist_lit = self.artist_vars[&indices];
-                            match self.solver.value(&artist_lit) {
+                            match solver.value(&artist_lit) {
                                 Value::True => println!(
                                     "artist: {} interval: {} venue: {}",
                                     artist, interval, venue
@@ -212,18 +214,18 @@ impl Scheduler {
     fn exactly_one(&mut self, variables: Vec<Variable>) {
         for i in 0..variables.len() {
             for j in i + 1..variables.len() {
-                self.solver
+                self.formula
                     .add_clause(vec![!variables[i].literal(), !variables[j].literal()]);
             }
         }
-        self.solver
+        self.formula
             .add_clause(variables.iter().map(|v| v.literal()).collect());
     }
 
     fn zero_or_one(&mut self, variables: Vec<Variable>) {
         for i in 0..variables.len() {
             for j in i + 1..variables.len() {
-                self.solver
+                self.formula
                     .add_clause(vec![!variables[i].literal(), !variables[j].literal()]);
             }
         }

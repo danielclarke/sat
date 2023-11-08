@@ -64,7 +64,7 @@ impl Board {
 
 pub struct Solver {
     board: Board,
-    solver: solver::Solver,
+    formula: solver::Formula,
     vars: Vec<solver::Variable>,
 }
 
@@ -72,7 +72,7 @@ impl Solver {
     pub fn new(board: Board) -> Solver {
         Solver {
             board,
-            solver: solver::Solver::new(),
+            formula: solver::Formula::new(),
             vars: vec![],
         }
     }
@@ -81,7 +81,7 @@ impl Solver {
         for _r in 0..ROWS {
             for _c in 0..COLUMNS {
                 for _v in 0..VALUES {
-                    self.vars.push(self.solver.add_var());
+                    self.vars.push(self.formula.add_var());
                 }
             }
         }
@@ -95,15 +95,15 @@ impl Solver {
         self.one_square_one_value();
         self.apply_board();
 
-        match self.solver.solve() {
+        let mut solver = solver::Solver::new(self.formula.clone());
+
+        match solver.solve() {
             Solution::Sat => {
                 let mut board = Board::new(ROWS, COLUMNS);
                 for r in 0..ROWS {
                     for c in 0..COLUMNS {
                         for v in 0..VALUES {
-                            if self
-                                .solver
-                                .value(&self.vars[r * COLUMNS * VALUES + c * VALUES + v])
+                            if solver.value(&self.vars[r * COLUMNS * VALUES + c * VALUES + v])
                                 == solver::Value::True
                             {
                                 board.board[r][c] = Some(v as u32);
@@ -126,11 +126,11 @@ impl Solver {
     fn exactly_one_true(&mut self, variables: Vec<solver::Variable>) {
         for i in 0..variables.len() {
             for j in i + 1..variables.len() {
-                self.solver
+                self.formula
                     .add_clause(vec![!variables[i].literal(), !variables[j].literal()]);
             }
         }
-        self.solver
+        self.formula
             .add_clause(variables.iter().map(|v| v.literal()).collect());
     }
 
@@ -138,7 +138,7 @@ impl Solver {
         for r in 0..ROWS {
             for c in 0..COLUMNS {
                 if let Some(value) = self.board.board[r][c] {
-                    self.solver
+                    self.formula
                         .add_clause(vec![self.get_var(r, c, value as usize).literal()]);
                 }
             }
