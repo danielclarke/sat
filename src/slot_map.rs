@@ -1,7 +1,7 @@
 use std::fmt;
 type Generation = usize;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 pub struct SlotKey {
     index: usize,
     generation: Generation,

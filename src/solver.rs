@@ -127,6 +127,16 @@ impl Clause {
     }
 }
 
+impl Not for Clause {
+    type Output = Clause;
+
+    fn not(self) -> <Self as Not>::Output {
+        Clause {
+            literals: self.literals.iter().map(|&l| !l).collect::<Vec<_>>(),
+        }
+    }
+}
+
 impl std::ops::Index<usize> for Clause {
     type Output = Literal;
 
@@ -325,7 +335,11 @@ impl Solver {
             match self.eval_clause(self.clauses.get(&slot_key).unwrap()) {
                 // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
                 Value::True => continue,
-                Value::False => unreachable!("False unit clause not earlier caught"),
+                Value::False => {
+                    println!("Num unit clauses {}", self.unit_clauses.len());
+                    self.print_clause(self.clauses.get(&slot_key).unwrap());
+                    unreachable!("False unit clause not earlier caught");
+                }
                 Value::Unknown => (),
             }
 
@@ -342,7 +356,7 @@ impl Solver {
             }
         }
 
-        let (mut handle, mut min_clause_length) = (None, None);
+        let (mut decision_literal, mut min_clause_length) = (None, None);
         for (slot_key, clause) in self.clauses.iter().items() {
             // unit clause propagation
             let clause_length = self.clause_length(clause);
@@ -374,12 +388,12 @@ impl Solver {
             }
 
             // cache the smallest clause encountered
-            match (handle, min_clause_length) {
+            match (decision_literal, min_clause_length) {
                 (None, None) => {
                     for literal in clause.iter() {
                         if literal.value(self.values[literal.handle]) == Value::Unknown {
-                            (handle, min_clause_length) =
-                                (Some(literal.handle), Some(clause_length));
+                            (decision_literal, min_clause_length) =
+                                (Some(*literal), Some(clause_length));
                             break;
                         }
                     }
@@ -388,8 +402,8 @@ impl Solver {
                     if clause_length < min_clause_length_ {
                         for literal in clause.iter() {
                             if literal.value(self.values[literal.handle]) == Value::Unknown {
-                                (handle, min_clause_length) =
-                                    (Some(literal.handle), Some(clause_length));
+                                (decision_literal, min_clause_length) =
+                                    (Some(*literal), Some(clause_length));
                                 break;
                             }
                         }
@@ -437,11 +451,10 @@ impl Solver {
         }
 
         // smallest clause
-        handle.map(|handle| {
-            // println!("Smallest clause {}", handle);
+        decision_literal.map(|literal| {
             (
                 self.decision_levels.last().map_or(0, |&dl| dl + 1),
-                VariableAssignment::new(handle, false),
+                VariableAssignment::new(literal.handle, literal.polarity),
             )
         })
     }
@@ -489,7 +502,7 @@ impl Solver {
         println!();
     }
 
-    fn reassign_watched_literal(&mut self) -> Result<(), DecisionLevel> {
+    fn reassign_watched_literal(&mut self) -> Result<(), SlotKey> {
         if let Some(&va) = self.decisions.last() {
             let false_literal_clauses = match va.values[va.index] {
                 Value::True => &self.negative_literal_clauses[va.handle],
@@ -508,20 +521,21 @@ impl Solver {
                         continue;
                     };
 
-                match self.clause_length(self.clauses.get(&slot_key).unwrap()) {
+                let clause = self.clauses.get(&slot_key).unwrap();
+
+                match self.clause_length(clause) {
                     0 => {
-                        if self.eval_clause(self.clauses.get(&slot_key).unwrap()) == Value::False {
-                            return Err(self.learn_clause(slot_key));
+                        if self.eval_clause(clause) == Value::False {
+                            return Err(slot_key);
                         }
                     }
                     1 => {
-                        if self.eval_clause(self.clauses.get(&slot_key).unwrap()) == Value::Unknown
-                        {
+                        if self.eval_clause(clause) == Value::Unknown {
                             self.unit_clauses.push(slot_key);
                         }
                     }
                     _ => {
-                        for &l in self.clauses.get(&slot_key).unwrap().iter() {
+                        for &l in clause.iter() {
                             if self.values[l.handle] == Value::Unknown
                                 && l != self.watched_literals.get(&slot_key).unwrap()[0]
                                 && l != self.watched_literals.get(&slot_key).unwrap()[1]
@@ -565,8 +579,6 @@ impl Solver {
     }
 
     fn backtrack(&mut self, backtrack_decision_level: DecisionLevel) -> Solution {
-        self.unit_clauses.clear();
-
         let mut backtrack_decision_level_ = backtrack_decision_level;
 
         let (decision_level, variable_assignment) = 'assignment: loop {
@@ -603,14 +615,12 @@ impl Solver {
 
         // reached a variable with a remaining assignment, try the other truth value
         self.values[variable_assignment.handle] = variable_assignment.values[1];
-        // self.values[variable_assignment.handle] =
-        //     variable_assignment.values[variable_assignment.index];
         // push it back onto the top of the stack
         self.decisions.push(VariableAssignment {
             index: 1,
             ..variable_assignment
         });
-        // self.decisions.push(variable_assignment);
+
         self.decision_levels.push(decision_level);
         self.variable_decision_levels[variable_assignment.handle] = Some(decision_level);
 
@@ -734,7 +744,7 @@ impl Solver {
     }
 
     fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
-        self.conflict_analysis_first_uip(clause_index)
+        self.conflict_analysis_last_uip(clause_index)
     }
 
     fn learn_clause(&mut self, c: ClauseIndex) -> DecisionLevel {
@@ -762,14 +772,23 @@ impl Solver {
 
         let decision_level = *self.decision_levels.last().unwrap();
 
-        // let decision_level = learned_clause
-        //     .literals
-        //     .iter()
-        //     .map(|&l| self.variable_decision_levels[l.handle])
-        //     .filter(|&l| l.is_some())
-        //     .map(|l| l.unwrap())
-        //     .min()
-        //     .map_or(0, |dl| dl);
+        // let decision_level = if learned_clause.literals.len() == 1 {
+        //     0
+        // } else {
+        //     let mut decision_levels = learned_clause
+        //         .literals
+        //         .iter()
+        //         .map(|&l| self.variable_decision_levels[l.handle])
+        //         .filter(|&l| l.is_some())
+        //         .map(|l| l.unwrap())
+        //         .collect::<Vec<_>>();
+        //     decision_levels.sort();
+        //     decision_levels.dedup();
+        //     decision_levels.reverse();
+        //     decision_levels
+        //         .get(1)
+        //         .map_or(*self.decision_levels.last().unwrap(), |&dl| dl)
+        // };
 
         let slot_key = self.clauses.insert(learned_clause);
         for literal in self.clauses.get(&slot_key).unwrap().iter() {
@@ -781,6 +800,9 @@ impl Solver {
             self.variable_clauses[literal.handle].push(slot_key);
         }
 
+        self.unit_clauses.clear();
+        // self.unit_clauses.push(slot_key);
+
         decision_level
         // a learned clause should have length = 1 after backtrack
         // backtracking which occurs after this will clear the stack anyway
@@ -789,13 +811,7 @@ impl Solver {
         // }
     }
 
-    pub fn solve(&mut self) -> Solution {
-        println!(
-            "Solving for {} variables with {} clauses",
-            self.variables.len(),
-            self.clauses.len()
-        );
-
+    fn discover_unit_clauses(&mut self) {
         let unit_clause_slot_keys = self
             .clauses
             .iter()
@@ -805,23 +821,76 @@ impl Solver {
             .collect::<Vec<_>>();
 
         for slot_key in unit_clause_slot_keys {
-            let clause = self.clauses.get(&slot_key).unwrap();
-            let clause_length = self.clause_length(clause);
+            self.unit_clauses.push(slot_key);
+        }
+    }
 
-            if clause_length == 1 {
-                let literal = &clause[0];
-                self.antecedents[literal.handle] = Some(slot_key);
-                let variable_assignment = VariableAssignment::new(literal.handle, literal.polarity);
+    fn unit_propagation(&mut self) -> Result<(), SlotKey> {
+        loop {
+            match self.unit_clauses.pop() {
+                Some(slot_key) => {
+                    let clause = self.clauses.get(&slot_key).unwrap();
+                    match self.eval_clause(clause) {
+                        // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                        Value::True => continue,
+                        Value::False => {
+                            println!("Num unit clauses {}", self.unit_clauses.len());
+                            self.print_clause(clause);
+                            unreachable!("False unit clause not earlier caught");
+                        }
+                        Value::Unknown => (),
+                    }
 
-                self.values[variable_assignment.handle] = variable_assignment.values[0];
-                self.variable_decision_levels[variable_assignment.handle] = Some(0);
-                self.decisions.push(variable_assignment);
-                self.decision_levels.push(0);
+                    match clause
+                        .iter()
+                        .find(|&l| self.values[l.handle] == Value::Unknown)
+                    {
+                        Some(literal) => {
+                            self.antecedents[literal.handle] = Some(slot_key);
+                            let dl = self.decision_levels.last().map_or(0, |&dl| dl);
+                            let va = VariableAssignment::new(literal.handle, literal.polarity);
+
+                            self.values[va.handle] = va.values[0];
+                            self.variable_decision_levels[va.handle] = Some(dl);
+                            self.decisions.push(va);
+                            self.decision_levels.push(dl);
+                        }
+                        None => unreachable!("No unknown variables in unit clause"),
+                    }
+
+                    self.reassign_watched_literal()?;
+                }
+                None => break,
             }
+        }
+        Ok(())
+    }
 
-            match self.reassign_watched_literal() {
-                Ok(_) => (),
-                Err(_) => return Solution::UnSat,
+    pub fn solve(&mut self) -> Solution {
+        println!(
+            "Solving for {} variables with {} clauses",
+            self.variables.len(),
+            self.clauses.len()
+        );
+
+        self.discover_unit_clauses();
+
+        match self.unit_propagation() {
+            Ok(_) => (),
+            Err(_) => return Solution::UnSat,
+        }
+
+        for clause in self.clauses.iter() {
+            match self.clause_length(clause) {
+                1 => match self.eval_clause(clause) {
+                    Value::True => (),
+                    Value::Unknown => (),
+                    Value::False => {
+                        self.print_clause(clause);
+                        unreachable!("Unit clause not found during unit propagation");
+                    }
+                },
+                _ => (),
             }
         }
 
@@ -842,6 +911,47 @@ impl Solver {
                 );
             }
 
+            // match self.next_unassigned() {
+            //     Some((decision_level, var)) => {
+            //         self.values[var.handle] = var.values[0];
+            //         self.variable_decision_levels[var.handle] = Some(decision_level);
+            //         self.decisions.push(var);
+            //         self.decision_levels.push(decision_level);
+
+            //         match self.reassign_watched_literal() {
+            //             Ok(_) => loop {
+            //                 match self.unit_propagation() {
+            //                     Ok(_) => break,
+            //                     Err(slot_key) => {
+            //                         let decision_level = self.learn_clause(slot_key);
+            //                         match self.backtrack(decision_level) {
+            //                             Solution::Sat => unreachable!("Backtrack found a solution"),
+            //                             Solution::UnSat => return Solution::UnSat,
+            //                             Solution::Unknown => (),
+            //                         }
+            //                     }
+            //                 }
+            //             },
+            //             Err(_) => {
+            //                 // let decision_level = self.learn_clause(slot_key);
+            //                 match self.backtrack(*self.decision_levels.last().unwrap()) {
+            //                     Solution::Sat => unreachable!("Backtrack found a solution"),
+            //                     Solution::UnSat => return Solution::UnSat,
+            //                     Solution::Unknown => (),
+            //                 }
+            //             }
+            //         }
+            //     }
+            //     None => match self.check_satisfiability() {
+            //         Solution::Sat => {
+            //             println!("Solved in Iterations: {}", i);
+            //             return Solution::Sat;
+            //         }
+            //         Solution::UnSat => return Solution::UnSat,
+            //         Solution::Unknown => return Solution::Unknown,
+            //     },
+            // }
+
             match self.reassign_watched_literal() {
                 Ok(_) => {
                     if let Some((decision_level, var)) = self.next_unassigned() {
@@ -860,11 +970,14 @@ impl Solver {
                         }
                     };
                 }
-                Err(decision_level) => match self.backtrack(decision_level) {
-                    Solution::Sat => unreachable!("Backtrack found a solution"),
-                    Solution::UnSat => return Solution::UnSat,
-                    Solution::Unknown => (),
-                },
+                Err(slot_key) => {
+                    let decision_level = self.learn_clause(slot_key);
+                    match self.backtrack(decision_level) {
+                        Solution::Sat => unreachable!("Backtrack found a solution"),
+                        Solution::UnSat => return Solution::UnSat,
+                        Solution::Unknown => (),
+                    }
+                }
             }
         }
     }
@@ -1059,6 +1172,185 @@ mod test_resolution {
                 v31.literal(),
             ]))
         );
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test_unit_propagation {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn test_unit_propagation() -> Result<(), Box<dyn Error>> {
+        let mut formula = Formula::new();
+
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+
+        let c1 = vec![v1.literal()];
+        let c2 = vec![!v1.literal(), v2.literal()];
+        let c3 = vec![!v3.literal()];
+
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+        let sk3 = formula.add_clause(c3);
+
+        let mut solver = Solver::new(formula);
+        solver.discover_unit_clauses();
+        assert_eq!(solver.unit_propagation(), Ok(()));
+
+        assert_eq!(solver.value(&v1), Value::True);
+        assert_eq!(solver.value(&v2), Value::True);
+        assert_eq!(solver.value(&v3), Value::False);
+
+        assert_eq!(solver.next_unassigned(), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unit_propagation_2() -> Result<(), Box<dyn Error>> {
+        let mut formula = Formula::new();
+
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+
+        let c1 = vec![v1.literal()];
+        let c2 = vec![!v2.literal(), v3.literal()];
+
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+
+        let mut solver = Solver::new(formula);
+        solver.discover_unit_clauses();
+        assert_eq!(solver.unit_propagation(), Ok(()));
+
+        assert_eq!(solver.value(&v1), Value::True);
+        assert_eq!(solver.value(&v2), Value::Unknown);
+        assert_eq!(solver.value(&v3), Value::Unknown);
+
+        assert_eq!(
+            solver.next_unassigned(),
+            Some((
+                1,
+                VariableAssignment {
+                    handle: v2.handle,
+                    index: 0,
+                    values: [Value::False, Value::True],
+                }
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unit_propagation_3() -> Result<(), Box<dyn Error>> {
+        let mut formula = Formula::new();
+
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+
+        let c1 = vec![v1.literal()];
+        let c2 = vec![!v1.literal(), !v2.literal(), v3.literal()];
+
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+
+        let mut solver = Solver::new(formula);
+        solver.discover_unit_clauses();
+
+        assert_eq!(solver.watched_literals.get(&sk1).unwrap()[0], v1.literal());
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[0], !v1.literal());
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[1], !v2.literal());
+
+        assert_eq!(solver.unit_propagation(), Ok(()));
+
+        assert_eq!(solver.value(&v1), Value::True);
+        assert_eq!(solver.value(&v2), Value::Unknown);
+        assert_eq!(solver.value(&v3), Value::Unknown);
+
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[0], v3.literal());
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[1], !v2.literal());
+
+        assert_eq!(
+            solver.next_unassigned(),
+            Some((
+                1,
+                VariableAssignment {
+                    handle: v2.handle,
+                    index: 0,
+                    values: [Value::False, Value::True],
+                }
+            ))
+        );
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[0], v3.literal());
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[1], !v2.literal());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unit_propagation_4() -> Result<(), Box<dyn Error>> {
+        let mut formula = Formula::new();
+
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+
+        let c1 = vec![v1.literal(), v2.literal()];
+        let c2 = vec![!v1.literal(), !v2.literal(), v3.literal()];
+        let c3 = vec![!v1.literal(), v2.literal(), !v3.literal()];
+
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+        let sk3 = formula.add_clause(c3);
+
+        let mut solver = Solver::new(formula);
+        solver.discover_unit_clauses();
+        assert_eq!(solver.unit_clauses.len(), 0);
+
+        assert_eq!(solver.watched_literals.get(&sk1).unwrap()[0], v1.literal());
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[0], !v1.literal());
+        assert_eq!(solver.watched_literals.get(&sk3).unwrap()[0], !v1.literal());
+
+        assert_eq!(solver.unit_propagation(), Ok(()));
+
+        assert_eq!(solver.value(&v1), Value::Unknown);
+        assert_eq!(solver.value(&v2), Value::Unknown);
+        assert_eq!(solver.value(&v3), Value::Unknown);
+
+        let decision_level = 0;
+        let va = VariableAssignment {
+            handle: v1.handle,
+            index: 0,
+            values: [Value::True, Value::False],
+        };
+
+        assert_eq!(solver.next_unassigned(), Some((decision_level, va)));
+
+        solver.values[v1.handle] = va.values[0];
+        solver.variable_decision_levels[v1.handle] = Some(decision_level);
+        solver.decisions.push(va);
+        solver.decision_levels.push(decision_level);
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+
+        assert_eq!(solver.value(&v1), Value::True);
+        assert_eq!(solver.value(&v2), Value::Unknown);
+        assert_eq!(solver.value(&v3), Value::Unknown);
+
+        assert_eq!(solver.watched_literals.get(&sk1).unwrap()[0], v1.literal());
+        assert_eq!(solver.watched_literals.get(&sk2).unwrap()[0], v3.literal());
+        assert_eq!(solver.watched_literals.get(&sk3).unwrap()[0], v2.literal());
 
         Ok(())
     }
