@@ -640,22 +640,6 @@ impl Solver {
         self.decision_levels.push(decision_level);
         self.variable_decision_levels[variable_assignment.handle] = Some(decision_level);
 
-        match self.reassign_watched_literal() {
-            Ok(()) => (),
-            Err(slot_key) => {
-                print!("Back track conflict clause: ");
-                let clause = self.clauses.get(&slot_key).unwrap();
-                self.print_clause(clause);
-                for literal in clause.iter() {
-                    for c in self.variable_clauses[literal.handle].iter() {
-                        self.print_clause(self.clauses.get(c).unwrap());
-                    }
-                }
-                println!("{:#?}", self.decisions.last().unwrap());
-                unreachable!("Backtracking lead to conflict {}", slot_key);
-            }
-        }
-
         Solution::Unknown
     }
 
@@ -764,9 +748,7 @@ impl Solver {
         self.conflict_analysis_last_uip(clause_index)
     }
 
-    fn learn_clause(&mut self, c: ClauseIndex) -> DecisionLevel {
-        let learned_clause = self.conflict_analysis(c);
-
+    fn learn_clause(&mut self, learned_clause: Clause) {
         let watched_literals = if learned_clause.len() == 1 {
             [learned_clause[0], learned_clause[0]] // unit clauses watch the only literal twice
         } else {
@@ -787,30 +769,6 @@ impl Solver {
 
         self.watched_literals.insert(watched_literals);
 
-        let decision_level = if learned_clause.literals.len() == 1 {
-            0
-        } else {
-            *self.decision_levels.last().unwrap()
-        };
-
-        // let decision_level = if learned_clause.literals.len() == 1 {
-        //     0
-        // } else {
-        //     let mut decision_levels = learned_clause
-        //         .literals
-        //         .iter()
-        //         .map(|&l| self.variable_decision_levels[l.handle])
-        //         .filter(|&l| l.is_some())
-        //         .map(|l| l.unwrap())
-        //         .collect::<Vec<_>>();
-        //     decision_levels.sort();
-        //     decision_levels.dedup();
-        //     decision_levels.reverse();
-        //     decision_levels
-        //         .get(1)
-        //         .map_or(*self.decision_levels.last().unwrap(), |&dl| dl)
-        // };
-
         let slot_key = self.clauses.insert(learned_clause);
         for literal in self.clauses.get(&slot_key).unwrap().iter() {
             if literal.polarity {
@@ -821,9 +779,7 @@ impl Solver {
             self.variable_clauses[literal.handle].push(slot_key);
         }
 
-        self.unit_clauses.clear();
-
-        decision_level
+        // self.unit_clauses.push(slot_key);
     }
 
     fn discover_unit_clauses(&mut self) {
@@ -926,73 +882,78 @@ impl Solver {
                 );
             }
 
-            // match self.next_unassigned() {
-            //     Some((decision_level, var)) => {
-            //         self.values[var.handle] = var.values[0];
-            //         self.variable_decision_levels[var.handle] = Some(decision_level);
-            //         self.decisions.push(var);
-            //         self.decision_levels.push(decision_level);
+            match self.next_unassigned() {
+                Some((dl, va)) => {
+                    self.values[va.handle] = va.values[0];
+                    self.variable_decision_levels[va.handle] = Some(dl);
+                    self.decisions.push(va);
+                    self.decision_levels.push(dl);
 
-            //         match self.reassign_watched_literal() {
-            //             Ok(_) => loop {
-            //                 match self.unit_propagation() {
-            //                     Ok(_) => break,
-            //                     Err(slot_key) => {
-            //                         let decision_level = self.learn_clause(slot_key);
-            //                         match self.backtrack(decision_level) {
-            //                             Solution::Sat => unreachable!("Backtrack found a solution"),
-            //                             Solution::UnSat => return Solution::UnSat,
-            //                             Solution::Unknown => (),
-            //                         }
-            //                     }
-            //                 }
-            //             },
-            //             Err(_) => {
-            //                 // let decision_level = self.learn_clause(slot_key);
-            //                 match self.backtrack(*self.decision_levels.last().unwrap()) {
-            //                     Solution::Sat => unreachable!("Backtrack found a solution"),
-            //                     Solution::UnSat => return Solution::UnSat,
-            //                     Solution::Unknown => (),
-            //                 }
-            //             }
-            //         }
-            //     }
-            //     None => match self.check_satisfiability() {
-            //         Solution::Sat => {
-            //             println!("Solved in Iterations: {}", i);
-            //             return Solution::Sat;
-            //         }
-            //         Solution::UnSat => return Solution::UnSat,
-            //         Solution::Unknown => return Solution::Unknown,
-            //     },
-            // }
+                    match self.reassign_watched_literal() {
+                        Ok(_) => (),
+                        Err(slot_key) => {
+                            let learned_clause = self.conflict_analysis(slot_key);
 
-            match self.reassign_watched_literal() {
-                Ok(_) => {
-                    if let Some((decision_level, var)) = self.next_unassigned() {
-                        self.values[var.handle] = var.values[0];
-                        self.variable_decision_levels[var.handle] = Some(decision_level);
-                        self.decisions.push(var);
-                        self.decision_levels.push(decision_level);
-                    } else {
-                        match self.check_satisfiability() {
-                            Solution::Sat => {
-                                println!("Solved in Iterations: {}", i);
-                                return Solution::Sat;
+                            let decision_level = if learned_clause.literals.len() == 1 {
+                                0
+                            } else {
+                                *self.decision_levels.last().unwrap()
+                            };
+
+                            // let decision_level = if learned_clause.literals.len() == 1 {
+                            //     0
+                            // } else {
+                            //     let mut decision_levels = learned_clause
+                            //         .literals
+                            //         .iter()
+                            //         .map(|&l| self.variable_decision_levels[l.handle])
+                            //         .filter(|&l| l.is_some())
+                            //         .map(|l| l.unwrap())
+                            //         .collect::<Vec<_>>();
+                            //     decision_levels.sort();
+                            //     decision_levels.dedup();
+                            //     decision_levels.reverse();
+                            //     decision_levels
+                            //         .get(1)
+                            //         .map_or(*self.decision_levels.last().unwrap(), |&dl| dl)
+                            // };
+
+                            self.unit_clauses.clear();
+
+                            match self.backtrack(decision_level) {
+                                Solution::Sat => unreachable!("Backtrack found a solution"),
+                                Solution::UnSat => return Solution::UnSat,
+                                Solution::Unknown => {
+                                    // need to ensure that the learned clause is the top clause on the stack
+                                    // to force the algorithm to make different decisions
+                                    match self.reassign_watched_literal() {
+                                        Ok(()) => {
+                                            self.learn_clause(learned_clause);
+                                        }
+                                        Err(slot_key) => {
+                                            print!("Back track conflict clause: ");
+                                            let clause = self.clauses.get(&slot_key).unwrap();
+                                            self.print_clause(clause);
+                                            for literal in clause.iter() {
+                                                for c in
+                                                    self.variable_clauses[literal.handle].iter()
+                                                {
+                                                    self.print_clause(self.clauses.get(c).unwrap());
+                                                }
+                                            }
+                                            println!("{:#?}", self.decisions.last().unwrap());
+                                            unreachable!(
+                                                "Backtracking lead to conflict {}",
+                                                slot_key
+                                            );
+                                        }
+                                    }
+                                }
                             }
-                            Solution::UnSat => return Solution::UnSat,
-                            Solution::Unknown => return Solution::Unknown,
                         }
-                    };
-                }
-                Err(slot_key) => {
-                    let decision_level = self.learn_clause(slot_key);
-                    match self.backtrack(decision_level) {
-                        Solution::Sat => unreachable!("Backtrack found a solution"),
-                        Solution::UnSat => return Solution::UnSat,
-                        Solution::Unknown => (),
                     }
                 }
+                None => return self.check_satisfiability(),
             }
         }
     }
