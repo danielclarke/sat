@@ -587,28 +587,22 @@ impl Solver {
     }
 
     fn backtrack(&mut self, backtrack_decision_level: DecisionLevel) -> Solution {
-        let (decision_level, variable_assignment) = 'assignment: loop {
-            let (decision_level, variable_assignment) = 'backtrack: loop {
-                let (decision_level, variable_assignment) = if let Some(var) = self.backtrack_once()
-                {
-                    var
-                } else {
-                    // all variables exhausted
-                    return Solution::UnSat;
-                };
-
-                if decision_level == backtrack_decision_level
-                    && (self.decision_levels.empty()
-                        || self.decision_levels.last().map_or(0, |&dl| dl)
-                            != backtrack_decision_level)
-                {
-                    break 'backtrack (decision_level, variable_assignment);
-                } else {
-                    self.antecedents[variable_assignment.handle] = None;
-                }
+        let (decision_level, variable_assignment) = 'backtrack: loop {
+            let (decision_level, variable_assignment) = if let Some(var) = self.backtrack_once() {
+                var
+            } else {
+                // all variables exhausted
+                return Solution::UnSat;
             };
 
-            break 'assignment (decision_level, variable_assignment);
+            if decision_level == backtrack_decision_level
+                && (self.decision_levels.empty()
+                    || self.decision_levels.last().map_or(0, |&dl| dl) != backtrack_decision_level)
+            {
+                break 'backtrack (decision_level, variable_assignment);
+            } else {
+                self.antecedents[variable_assignment.handle] = None;
+            }
         };
 
         if decision_level == 0 {
@@ -785,42 +779,37 @@ impl Solver {
     }
 
     fn unit_propagation(&mut self) -> Result<(), SlotKey> {
-        loop {
-            match self.unit_clauses.pop() {
-                Some(slot_key) => {
-                    let clause = self.clauses.get(&slot_key).unwrap();
-                    match self.eval_clause(clause) {
-                        // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
-                        Value::True => continue,
-                        Value::False => {
-                            println!("Num unit clauses {}", self.unit_clauses.len());
-                            self.print_clause(clause);
-                            unreachable!("False unit clause not earlier caught");
-                        }
-                        Value::Unknown => (),
-                    }
-
-                    match clause
-                        .iter()
-                        .find(|&l| self.values[l.handle] == Value::Unknown)
-                    {
-                        Some(literal) => {
-                            self.antecedents[literal.handle] = Some(slot_key);
-                            let dl = self.decision_levels.last().map_or(0, |&dl| dl);
-                            let va = VariableAssignment::new(literal.handle, literal.polarity);
-
-                            self.values[va.handle] = va.values[0];
-                            self.variable_decision_levels[va.handle] = Some(dl);
-                            self.decisions.push(va);
-                            self.decision_levels.push(dl);
-                        }
-                        None => unreachable!("No unknown variables in unit clause"),
-                    }
-
-                    self.reassign_watched_literal()?;
+        while let Some(slot_key) = self.unit_clauses.pop() {
+            let clause = self.clauses.get(&slot_key).unwrap();
+            match self.eval_clause(clause) {
+                // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                Value::True => continue,
+                Value::False => {
+                    println!("Num unit clauses {}", self.unit_clauses.len());
+                    self.print_clause(clause);
+                    unreachable!("False unit clause not earlier caught");
                 }
-                None => break,
+                Value::Unknown => (),
             }
+
+            match clause
+                .iter()
+                .find(|&l| self.values[l.handle] == Value::Unknown)
+            {
+                Some(literal) => {
+                    self.antecedents[literal.handle] = Some(slot_key);
+                    let dl = self.decision_levels.last().map_or(0, |&dl| dl);
+                    let va = VariableAssignment::new(literal.handle, literal.polarity);
+
+                    self.values[va.handle] = va.values[0];
+                    self.variable_decision_levels[va.handle] = Some(dl);
+                    self.decisions.push(va);
+                    self.decision_levels.push(dl);
+                }
+                None => unreachable!("No unknown variables in unit clause"),
+            }
+
+            self.reassign_watched_literal()?;
         }
         Ok(())
     }
@@ -840,16 +829,15 @@ impl Solver {
         }
 
         for clause in self.clauses.iter() {
-            match self.clause_length(clause) {
-                1 => match self.eval_clause(clause) {
+            if self.clause_length(clause) == 1 {
+                match self.eval_clause(clause) {
                     Value::True => (),
                     Value::Unknown => (),
                     Value::False => {
                         self.print_clause(clause);
                         unreachable!("Unit clause not found during unit propagation");
                     }
-                },
-                _ => (),
+                }
             }
         }
 
@@ -895,8 +883,7 @@ impl Solver {
                                     .literals
                                     .iter()
                                     .map(|&l| self.variable_decision_levels[l.handle])
-                                    .filter(|&l| l.is_some())
-                                    .map(|l| l.unwrap())
+                                    .flatten()
                                     .collect::<Vec<_>>();
                                 decision_levels.sort();
                                 decision_levels.dedup();
@@ -956,16 +943,13 @@ impl Solver {
         }
 
         let mut dl_iter = self.decision_levels.iter();
-        match dl_iter.next() {
-            Some(mut dl) => {
-                for dl_ in dl_iter {
-                    if dl < dl_ {
-                        unreachable!("Decision levels out of order! Decision level {} is a more recent decision than {}", dl, dl_);
-                    }
-                    dl = dl_;
+        if let Some(mut dl) = dl_iter.next() {
+            for dl_ in dl_iter {
+                if dl < dl_ {
+                    unreachable!("Decision levels out of order! Decision level {} is a more recent decision than {}", dl, dl_);
                 }
+                dl = dl_;
             }
-            None => (),
         }
     }
 }
