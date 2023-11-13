@@ -4,6 +4,7 @@ use std::{error, fmt};
 use crate::fixed_size_stack::FixedSizeStack;
 use crate::slot_map::{SlotKey, SlotMap};
 
+#[derive(Debug, PartialEq)]
 pub enum Solution {
     Sat,
     UnSat,
@@ -267,6 +268,11 @@ pub struct Solver {
 impl Solver {
     pub fn new(formula: Formula) -> Self {
         let mut formula = formula;
+
+        // add a standalone unit clause to make backtracking simpler
+        let v = formula.add_var();
+        formula.add_clause(vec![v.literal()]);
+
         let num_variables = formula.variables.as_ref().unwrap().len();
         let num_clauses = formula.clauses.as_ref().unwrap().len();
         let mut variable_clauses = vec![vec![]; num_variables];
@@ -373,10 +379,12 @@ impl Solver {
                     Value::Unknown => (),
                 }
 
+                // unreachable!("Unit clause not earlier caught");
+
                 for literal in clause.iter() {
                     if literal.value(self.values[literal.handle]) == Value::Unknown {
                         self.antecedents[literal.handle] = Some(slot_key);
-                        let dl = self.decision_levels.last().map_or(0, |&dl| dl + 1);
+                        let dl = self.decision_levels.last().map_or(0, |&dl| dl);
 
                         // println!("Unit Clause {:#?} {:#?}", literal.handle, dl.unwrap());
                         return Some((
@@ -613,6 +621,14 @@ impl Solver {
             }
         };
 
+        if decision_level == 0 {
+            self.discover_unit_clauses();
+            match self.unit_propagation() {
+                Ok(_) => return Solution::Unknown,
+                Err(_) => return Solution::UnSat,
+            }
+        }
+
         // reached a variable with a remaining assignment, try the other truth value
         self.values[variable_assignment.handle] = variable_assignment.values[1];
         // push it back onto the top of the stack
@@ -623,6 +639,22 @@ impl Solver {
 
         self.decision_levels.push(decision_level);
         self.variable_decision_levels[variable_assignment.handle] = Some(decision_level);
+
+        match self.reassign_watched_literal() {
+            Ok(()) => (),
+            Err(slot_key) => {
+                print!("Back track conflict clause: ");
+                let clause = self.clauses.get(&slot_key).unwrap();
+                self.print_clause(clause);
+                for literal in clause.iter() {
+                    for c in self.variable_clauses[literal.handle].iter() {
+                        self.print_clause(self.clauses.get(c).unwrap());
+                    }
+                }
+                println!("{:#?}", self.decisions.last().unwrap());
+                unreachable!("Backtracking lead to conflict {}", slot_key);
+            }
+        }
 
         Solution::Unknown
     }
@@ -653,9 +685,6 @@ impl Solver {
     fn conflict_analysis_last_uip(&self, clause_index: ClauseIndex) -> Clause {
         let mut clause: Vec<Literal> = vec![];
 
-        let latest_decision_level = *self.decision_levels.last().unwrap();
-        let latest_decision = self.get_most_recent_decision_assignment().unwrap();
-
         let mut literal_queue = self.clauses.get(&clause_index).unwrap().literals.clone();
         let mut visited_list = vec![];
 
@@ -666,10 +695,7 @@ impl Solver {
 
             let literal = literal_queue.remove(0);
             visited_list.push(literal.handle);
-            if self.variable_decision_levels[literal.handle] == Some(latest_decision_level) {
-                if literal.handle == latest_decision.handle {
-                    clause.push(literal);
-                }
+            if self.antecedents[literal.handle].is_some() {
                 match self.antecedents[literal.handle] {
                     None => (),
                     Some(antecedent) => {
@@ -695,12 +721,7 @@ impl Solver {
 
         let latest_decision_level = *self.decision_levels.last().unwrap();
 
-        let mut literal_queue = clause
-            .literals
-            .iter()
-            .filter(|&l| self.variable_decision_levels[l.handle] == Some(latest_decision_level))
-            .copied()
-            .collect::<Vec<_>>();
+        let mut literal_queue = clause.iter().copied().collect::<Vec<_>>();
         let mut visited_list = vec![];
 
         loop {
@@ -717,19 +738,15 @@ impl Solver {
             match self.antecedents[literal.handle] {
                 None => (),
                 Some(slot_key) => {
-                    let antecedent = &mut self.clauses.get(&slot_key).unwrap().literals.clone();
+                    let antecedent = &mut self.clauses.get(&slot_key).unwrap();
                     literal_queue.append(
                         &mut antecedent
                             .iter()
-                            .filter(|&l| {
-                                self.variable_decision_levels[l.handle]
-                                    == Some(latest_decision_level)
-                            })
                             .filter(|&&l| !visited_list.contains(&l.handle))
                             .copied()
                             .collect::<Vec<_>>(),
                     );
-                    match resolve(&clause, self.clauses.get(&slot_key).unwrap()) {
+                    match resolve(&clause, antecedent) {
                         None => (),
                         Some(resolvent) => {
                             if clause == resolvent {
@@ -770,7 +787,11 @@ impl Solver {
 
         self.watched_literals.insert(watched_literals);
 
-        let decision_level = *self.decision_levels.last().unwrap();
+        let decision_level = if learned_clause.literals.len() == 1 {
+            0
+        } else {
+            *self.decision_levels.last().unwrap()
+        };
 
         // let decision_level = if learned_clause.literals.len() == 1 {
         //     0
@@ -801,14 +822,8 @@ impl Solver {
         }
 
         self.unit_clauses.clear();
-        // self.unit_clauses.push(slot_key);
 
         decision_level
-        // a learned clause should have length = 1 after backtrack
-        // backtracking which occurs after this will clear the stack anyway
-        // if self.clause_length(&self.clauses.get(&slot_key).unwrap()) == 1 {
-        //     self.unit_clauses.push(slot_key);
-        // }
     }
 
     fn discover_unit_clauses(&mut self) {
