@@ -561,7 +561,8 @@ impl Solver {
         Ok(())
     }
 
-    fn check_satisfiability(&self) -> Solution {
+    fn check_satisfiability(&self, iteration: usize) -> Solution {
+        println!("Solver completed in {} iterations", iteration);
         match self
             .clauses
             .iter()
@@ -870,12 +871,6 @@ impl Solver {
                         Err(slot_key) => {
                             let learned_clause = self.conflict_analysis(slot_key);
 
-                            // let decision_level = if learned_clause.literals.len() == 1 {
-                            //     0
-                            // } else {
-                            //     *self.decision_levels.last().unwrap()
-                            // };
-
                             let decision_level = if learned_clause.literals.len() == 1 {
                                 0
                             } else {
@@ -928,7 +923,7 @@ impl Solver {
                         }
                     }
                 }
-                None => return self.check_satisfiability(),
+                None => return self.check_satisfiability(i),
             }
         }
     }
