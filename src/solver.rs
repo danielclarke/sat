@@ -116,6 +116,17 @@ impl Clause {
         }
     }
 
+    fn union(&mut self, clause: Clause) {
+        let mut clause = clause;
+        self.literals.append(&mut clause.literals);
+        self.literals.sort();
+        self.literals.dedup();
+    }
+
+    fn empty(&self) -> bool {
+        self.literals.len() == 0
+    }
+
     fn len(&self) -> usize {
         self.literals.len()
     }
@@ -263,6 +274,9 @@ pub struct Solver {
     // implication_vertices:
     watched_literals: SlotMap<[Literal; 2]>,
     unit_clauses: FixedSizeStack<ClauseIndex>,
+
+    // learning
+    visited: Vec<bool>,
 }
 
 impl Solver {
@@ -324,6 +338,7 @@ impl Solver {
             antecedents,
             watched_literals,
             unit_clauses,
+            visited: vec![false; num_variables],
         }
     }
 
@@ -561,8 +576,9 @@ impl Solver {
         Ok(())
     }
 
-    fn check_satisfiability(&self, iteration: usize) -> Solution {
+    fn check_satisfiability(&self, iteration: usize, num_clauses: usize) -> Solution {
         println!("Solver completed in {} iterations", iteration);
+        println!("Clauses: {}", num_clauses);
         match self
             .clauses
             .iter()
@@ -649,19 +665,24 @@ impl Solver {
             .count()
     }
 
-    fn conflict_analysis_last_uip(&self, clause_index: ClauseIndex) -> Clause {
+    fn conflict_analysis_last_uip(&mut self, clause_index: ClauseIndex) -> Clause {
         let mut clause: Vec<Literal> = vec![];
 
         let mut literal_queue = self.clauses.get(&clause_index).unwrap().literals.clone();
-        let mut visited_list = vec![];
+
+        let mut visited_to_clear: Vec<usize> = vec![];
 
         loop {
             if literal_queue.is_empty() {
+                for l in visited_to_clear {
+                    self.visited[l] = false;
+                }
                 return Clause::new(clause);
             }
 
             let literal = literal_queue.remove(0);
-            visited_list.push(literal.handle);
+            visited_to_clear.push(literal.handle);
+            self.visited[literal.handle] = true;
             if self.antecedents[literal.handle].is_some() {
                 match self.antecedents[literal.handle] {
                     None => (),
@@ -671,7 +692,7 @@ impl Solver {
                         literal_queue.append(
                             &mut antecedent_clause
                                 .iter()
-                                .filter(|&&l| !visited_list.contains(&l.handle))
+                                .filter(|&&l| !self.visited[l.handle])
                                 .copied()
                                 .collect::<Vec<_>>(),
                         );
@@ -688,33 +709,41 @@ impl Solver {
 
         let latest_decision_level = *self.decision_levels.last().unwrap();
 
-        let mut literal_queue = clause.iter().copied().collect::<Vec<_>>();
         let mut visited_list = vec![];
 
-        loop {
-            if literal_queue.is_empty() {
-                return clause;
+        for va in self.decisions.iter() {
+            if visited_list.contains(&va.handle) {
+                continue;
             }
-
+            visited_list.push(va.handle);
             if self.decision_level_count(&clause, latest_decision_level) == 1 {
                 return clause;
             }
 
-            let literal = literal_queue.remove(0);
-            visited_list.push(literal.handle);
-            match self.antecedents[literal.handle] {
+            match self.antecedents[va.handle] {
                 None => (),
                 Some(slot_key) => {
                     let antecedent = &mut self.clauses.get(&slot_key).unwrap();
-                    literal_queue.append(
-                        &mut antecedent
-                            .iter()
-                            .filter(|&&l| !visited_list.contains(&l.handle))
-                            .copied()
-                            .collect::<Vec<_>>(),
-                    );
+
+                    if antecedent
+                        .iter()
+                        .filter(|&l| {
+                            self.variable_decision_levels[l.handle] == Some(latest_decision_level)
+                                && self.antecedents[l.handle].is_some()
+                        })
+                        .count()
+                        == 0
+                    {
+                        continue;
+                    }
+
                     match resolve(&clause, antecedent) {
-                        None => (),
+                        None => {
+                            self.print_clause(&clause);
+                            println!();
+                            self.print_clause(&antecedent);
+                            unreachable!("resolving clauses lead to empty clause");
+                        }
                         Some(resolvent) => {
                             if clause == resolvent {
                                 return clause;
@@ -725,9 +754,11 @@ impl Solver {
                 }
             }
         }
+
+        return clause;
     }
 
-    fn conflict_analysis(&self, clause_index: ClauseIndex) -> Clause {
+    fn conflict_analysis(&mut self, clause_index: ClauseIndex) -> Clause {
         self.conflict_analysis_last_uip(clause_index)
     }
 
@@ -923,7 +954,7 @@ impl Solver {
                         }
                     }
                 }
-                None => return self.check_satisfiability(i),
+                None => return self.check_satisfiability(i, self.clauses.len()),
             }
         }
     }
@@ -963,6 +994,45 @@ impl fmt::Display for SolutionError {
 }
 
 impl error::Error for SolutionError {}
+
+#[cfg(test)]
+mod test_solutions {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn test_unsat_formula() -> Result<(), Box<dyn Error>> {
+        let mut formula = Formula::new();
+
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+
+        let c1 = vec![v1.literal(), v2.literal()];
+        let c2 = vec![!v1.literal(), v2.literal()];
+        let c3 = vec![v1.literal(), !v2.literal()];
+        let c4 = vec![!v1.literal(), !v2.literal()];
+        let c5 = vec![v3.literal()];
+
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+        let sk3 = formula.add_clause(c3);
+        let sk4 = formula.add_clause(c4);
+        // let sk5 = formula.add_clause(c5);
+
+        let mut solver = Solver::new(formula);
+
+        let solution = solver.solve();
+
+        println!("v1: {:#?}", solver.value(&v1));
+        println!("v2: {:#?}", solver.value(&v2));
+        // println!("v3: {:#?}", solver.value(&v3));
+
+        assert_eq!(solution, Solution::UnSat);
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod test_resolution {
@@ -1259,7 +1329,7 @@ mod test_unit_propagation {
 
         let mut solver = Solver::new(formula);
         solver.discover_unit_clauses();
-        assert_eq!(solver.unit_clauses.len(), 0);
+        assert_eq!(solver.unit_clauses.len(), 1);
 
         assert_eq!(solver.watched_literals.get(&sk1).unwrap()[0], v1.literal());
         assert_eq!(solver.watched_literals.get(&sk2).unwrap()[0], !v1.literal());
@@ -1271,7 +1341,7 @@ mod test_unit_propagation {
         assert_eq!(solver.value(&v2), Value::Unknown);
         assert_eq!(solver.value(&v3), Value::Unknown);
 
-        let decision_level = 0;
+        let decision_level = 1;
         let va = VariableAssignment {
             handle: v1.handle,
             index: 0,
@@ -1564,6 +1634,282 @@ mod test_clause_learning {
                 values: [Value::False, Value::True]
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_conflict_analysis_() -> Result<(), Box<dyn Error>> {
+        let mut formula = Formula::new();
+
+        formula.add_var();
+        let v1 = formula.add_var();
+        let v2 = formula.add_var();
+        let v3 = formula.add_var();
+        let v4 = formula.add_var();
+        let v5 = formula.add_var();
+        let v6 = formula.add_var();
+        let v7 = formula.add_var();
+        let v8 = formula.add_var();
+        let v9 = formula.add_var();
+
+        let c1 = vec![!v2.literal(), !v3.literal(), !v4.literal()];
+        let c2 = vec![!v3.literal(), !v5.literal(), !v6.literal()];
+        let c3 = vec![v4.literal(), v6.literal(), v7.literal()];
+        let c4 = vec![!v7.literal(), !v8.literal()];
+        let c5 = vec![!v1.literal(), !v7.literal(), !v9.literal()];
+        let c6 = vec![!v1.literal(), v8.literal(), v9.literal()];
+
+        let sk1 = formula.add_clause(c1);
+        let sk2 = formula.add_clause(c2);
+        let sk3 = formula.add_clause(c3);
+        let sk4 = formula.add_clause(c4);
+        let sk5 = formula.add_clause(c5);
+        let sk6 = formula.add_clause(c6);
+
+        let mut solver = Solver::new(formula);
+
+        let v = v1;
+        let dl = 1;
+        let va = VariableAssignment {
+            handle: v.handle,
+            index: 0,
+            values: [Value::True, Value::False],
+        };
+        solver.values[va.handle] = va.values[0];
+        solver.variable_decision_levels[va.handle] = Some(dl);
+        solver.decision_levels.push(dl);
+        solver.decisions.push(va);
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert!(solver.unit_clauses.empty());
+
+        let v = v2;
+        let dl = 2;
+        let va = VariableAssignment {
+            handle: v.handle,
+            index: 0,
+            values: [Value::True, Value::False],
+        };
+        solver.values[va.handle] = va.values[0];
+        solver.variable_decision_levels[va.handle] = Some(dl);
+        solver.decision_levels.push(dl);
+        solver.decisions.push(va);
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert!(solver.unit_clauses.empty());
+
+        let v = v3;
+        let dl = 3;
+        let va = VariableAssignment {
+            handle: v.handle,
+            index: 0,
+            values: [Value::True, Value::False],
+        };
+        solver.values[va.handle] = va.values[0];
+        solver.variable_decision_levels[va.handle] = Some(dl);
+        solver.decision_levels.push(dl);
+        solver.decisions.push(va);
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert_eq!(*solver.unit_clauses.last().unwrap(), sk1);
+
+        match solver.next_unassigned() {
+            Some((dl, va)) => {
+                assert_eq!(dl, 3);
+                assert_eq!(
+                    va,
+                    VariableAssignment {
+                        handle: v4.handle,
+                        index: 0,
+                        values: [Value::False, Value::True]
+                    }
+                );
+                solver.values[va.handle] = va.values[0];
+                solver.variable_decision_levels[va.handle] = Some(dl);
+                solver.decision_levels.push(dl);
+                solver.decisions.push(va);
+            }
+            None => {
+                assert!(false);
+            }
+        }
+
+        // solver
+        // .unit_clauses
+        // .iter()
+        // .for_each(|sk| solver.print_clause(solver.clauses.get(sk).unwrap()));
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert!(solver.unit_clauses.empty());
+
+        let v = v5;
+        let dl = 4;
+        let va = VariableAssignment {
+            handle: v.handle,
+            index: 0,
+            values: [Value::True, Value::False],
+        };
+        solver.values[va.handle] = va.values[0];
+        solver.variable_decision_levels[va.handle] = Some(dl);
+        solver.decision_levels.push(dl);
+        solver.decisions.push(va);
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert_eq!(*solver.unit_clauses.last().unwrap(), sk2);
+
+        match solver.next_unassigned() {
+            Some((dl, va)) => {
+                assert_eq!(dl, 4);
+                assert_eq!(
+                    va,
+                    VariableAssignment {
+                        handle: v6.handle,
+                        index: 0,
+                        values: [Value::False, Value::True]
+                    }
+                );
+                solver.values[va.handle] = va.values[0];
+                solver.variable_decision_levels[va.handle] = Some(dl);
+                solver.decision_levels.push(dl);
+                solver.decisions.push(va);
+            }
+            None => {
+                assert!(false);
+            }
+        }
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert_eq!(*solver.unit_clauses.last().unwrap(), sk3);
+
+        solver
+            .unit_clauses
+            .iter()
+            .for_each(|sk| solver.print_clause(solver.clauses.get(sk).unwrap()));
+
+        match solver.next_unassigned() {
+            Some((dl, va)) => {
+                assert_eq!(dl, 4);
+                assert_eq!(
+                    va,
+                    VariableAssignment {
+                        handle: v7.handle,
+                        index: 0,
+                        values: [Value::True, Value::False]
+                    }
+                );
+                solver.values[va.handle] = va.values[0];
+                solver.variable_decision_levels[va.handle] = Some(dl);
+                solver.decision_levels.push(dl);
+                solver.decisions.push(va);
+            }
+            None => {
+                assert!(false);
+            }
+        }
+
+        solver
+            .unit_clauses
+            .iter()
+            .for_each(|sk| solver.print_clause(solver.clauses.get(sk).unwrap()));
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+
+        solver
+            .unit_clauses
+            .iter()
+            .for_each(|sk| solver.print_clause(solver.clauses.get(sk).unwrap()));
+
+        // assert_eq!(*solver.unit_clauses.last().unwrap(), sk4);
+
+        match solver.next_unassigned() {
+            Some((dl, va)) => {
+                assert_eq!(dl, 4);
+                // assert_eq!(
+                //     va,
+                //     VariableAssignment {
+                //         handle: v8.handle,
+                //         index: 0,
+                //         values: [Value::False, Value::True]
+                //     }
+                // );
+                solver.values[va.handle] = va.values[0];
+                solver.variable_decision_levels[va.handle] = Some(dl);
+                solver.decision_levels.push(dl);
+                solver.decisions.push(va);
+            }
+            None => {
+                assert!(false);
+            }
+        }
+
+        assert_eq!(solver.reassign_watched_literal(), Ok(()));
+        assert_eq!(*solver.unit_clauses.last().unwrap(), sk6);
+
+        solver
+            .unit_clauses
+            .iter()
+            .for_each(|sk| solver.print_clause(solver.clauses.get(sk).unwrap()));
+
+        match solver.next_unassigned() {
+            Some((dl, va)) => {
+                assert_eq!(dl, 4);
+                // assert_eq!(
+                //     va,
+                //     VariableAssignment {
+                //         handle: v9.handle,
+                //         index: 0,
+                //         values: [Value::True, Value::False]
+                //     }
+                // );
+                solver.values[va.handle] = va.values[0];
+                solver.variable_decision_levels[va.handle] = Some(dl);
+                solver.decision_levels.push(dl);
+                solver.decisions.push(va);
+            }
+            None => {
+                assert!(false);
+            }
+        }
+
+        solver
+            .unit_clauses
+            .iter()
+            .for_each(|sk| solver.print_clause(solver.clauses.get(sk).unwrap()));
+
+        match solver.reassign_watched_literal() {
+            Ok(()) => assert!(false),
+            Err(slot_key) => {
+                // assert_eq!(slot_key, sk5);
+
+                let learned_clause = solver.conflict_analysis_last_uip(slot_key);
+
+                learned_clause
+                    .iter()
+                    .for_each(|l| print!("{:#?} ", solver.antecedents[l.handle]));
+
+                assert_eq!(
+                    learned_clause,
+                    Clause::new(vec![
+                        !v1.literal(),
+                        !v2.literal(),
+                        !v3.literal(),
+                        !v5.literal()
+                    ])
+                );
+
+                let learned_clause = solver.conflict_analysis_first_uip(slot_key);
+
+                learned_clause
+                    .iter()
+                    .for_each(|l| print!("{:#?} ", solver.antecedents[l.handle]));
+
+                assert_eq!(
+                    learned_clause,
+                    Clause::new(vec![!v1.literal(), !v7.literal()])
+                );
+            }
+        }
 
         Ok(())
     }
