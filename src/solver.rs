@@ -473,10 +473,16 @@ impl Solver {
     }
 
     fn clause_length(&self, clause: &Clause) -> usize {
-        clause
-            .iter()
-            .filter(|l| self.values[l.handle] == Value::Unknown)
-            .count()
+        let mut count = 0;
+        for literal in clause.iter() {
+            match literal.value(self.values[literal.handle]) {
+                Value::True => return 0,
+                Value::False => (),
+                Value::Unknown => count += 1,
+            }
+        }
+
+        count
     }
 
     fn eval_clause(&self, clause: &Clause) -> Value {
