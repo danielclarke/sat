@@ -27,13 +27,13 @@ impl Board {
     }
 
     pub fn is_valid(&self) -> bool {
-        for i in 0..8 {
-            for c in 0..8 {
-                match &self.board[i][..].iter().find(|&&v| v == Some(c)) {
+        for i in 0..VALUES {
+            for c in 0..COLUMNS {
+                match &self.board[i][..].iter().find(|&&v| v == Some(c as u32)) {
                     None => return false,
                     Some(_) => (),
                 }
-                match &self.board[..][i].iter().find(|&&v| v == Some(c)) {
+                match &self.board[..][i].iter().find(|&&v| v == Some(c as u32)) {
                     None => return false,
                     Some(_) => (),
                 }

@@ -277,6 +277,7 @@ pub struct Solver {
 
     // learning
     visited: Vec<bool>,
+    seen: Vec<bool>,
 }
 
 impl Solver {
@@ -339,6 +340,7 @@ impl Solver {
             watched_literals,
             unit_clauses,
             visited: vec![false; num_variables],
+            seen: vec![false; num_variables],
         }
     }
 
@@ -353,6 +355,11 @@ impl Solver {
         //   3. smallest clause
 
         while let Some(slot_key) = self.unit_clauses.pop() {
+            if self.clause_length(self.clauses.get(&slot_key).unwrap()) > 1 {
+                self.print_clause(self.clauses.get(&slot_key).unwrap());
+                unreachable!("non unit clause in unit stack");
+            }
+
             match self.eval_clause(self.clauses.get(&slot_key).unwrap()) {
                 // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
                 Value::True => continue,
@@ -368,7 +375,6 @@ impl Solver {
                 if literal.value(self.values[literal.handle]) == Value::Unknown {
                     self.antecedents[literal.handle] = Some(slot_key);
                     let dl = self.decision_levels.last().map_or(0, |&dl| dl);
-                    // println!("BCP {:#?} {:#?}", literal.handle, dl);
                     return Some((
                         dl,
                         VariableAssignment::new(literal.handle, literal.polarity),
@@ -378,7 +384,7 @@ impl Solver {
         }
 
         let (mut decision_literal, mut min_clause_length) = (None, None);
-        for (slot_key, clause) in self.clauses.iter().items() {
+        for (_, clause) in self.clauses.iter().items() {
             // unit clause propagation
             let clause_length = self.clause_length(clause);
 
@@ -391,22 +397,7 @@ impl Solver {
                     // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
                     Value::True => continue,
                     Value::False => unreachable!("False clause not earlier caught"),
-                    Value::Unknown => (),
-                }
-
-                // unreachable!("Unit clause not earlier caught");
-
-                for literal in clause.iter() {
-                    if literal.value(self.values[literal.handle]) == Value::Unknown {
-                        self.antecedents[literal.handle] = Some(slot_key);
-                        let dl = self.decision_levels.last().map_or(0, |&dl| dl);
-
-                        // println!("Unit Clause {:#?} {:#?}", literal.handle, dl.unwrap());
-                        return Some((
-                            dl,
-                            VariableAssignment::new(literal.handle, literal.polarity),
-                        ));
-                    }
+                    Value::Unknown => unreachable!("Unit clause not earlier caught"),
                 }
             }
 
@@ -462,7 +453,6 @@ impl Solver {
                     match polarity {
                         None => (),
                         Some(polarity) => {
-                            // println!("Polarity {}", v);
                             return Some((
                                 self.decision_levels.last().map_or(0, |&dl| dl + 1),
                                 VariableAssignment::new(v, polarity),
@@ -507,14 +497,20 @@ impl Solver {
         print!("x_");
         print!("{}", literal.handle);
         print!(
-            "_({},{}) ",
+            "_({},{},{},{}) ",
             self.variable_decision_levels[literal.handle]
                 .map_or("None".to_owned(), |dl| format!("{}", dl)),
             match self.values[literal.handle] {
                 Value::True => "T",
                 Value::False => "F",
                 Value::Unknown => "U",
-            }
+            },
+            if self.seen[literal.handle] { "s" } else { "." },
+            if self.visited[literal.handle] {
+                "v"
+            } else {
+                "."
+            },
         );
     }
 
@@ -612,14 +608,11 @@ impl Solver {
                 return Solution::UnSat;
             };
 
-            if decision_level == backtrack_decision_level
-                && (self.decision_levels.empty()
-                    || self.decision_levels.last().map_or(0, |&dl| dl) != backtrack_decision_level)
-            {
+            if decision_level == backtrack_decision_level {
                 break 'backtrack (decision_level, variable_assignment);
             } else {
                 self.antecedents[variable_assignment.handle] = None;
-            }
+            };
         };
 
         if decision_level == 0 {
@@ -683,83 +676,100 @@ impl Solver {
             let literal = literal_queue.remove(0);
             visited_to_clear.push(literal.handle);
             self.visited[literal.handle] = true;
-            if self.antecedents[literal.handle].is_some() {
-                match self.antecedents[literal.handle] {
-                    None => (),
-                    Some(antecedent) => {
-                        let antecedent_clause =
-                            &mut self.clauses.get(&antecedent).unwrap().literals.clone();
-                        literal_queue.append(
-                            &mut antecedent_clause
-                                .iter()
-                                .filter(|&&l| !self.visited[l.handle])
-                                .copied()
-                                .collect::<Vec<_>>(),
-                        );
-                    }
+            match self.antecedents[literal.handle] {
+                None => clause.push(literal),
+                Some(antecedent) => {
+                    let antecedent_clause =
+                        &mut self.clauses.get(&antecedent).unwrap().literals.clone();
+                    literal_queue.append(
+                        &mut antecedent_clause
+                            .iter()
+                            .filter(|&&l| !self.visited[l.handle])
+                            .copied()
+                            .collect::<Vec<_>>(),
+                    );
                 }
-            } else {
-                clause.push(literal);
             }
         }
     }
 
-    fn conflict_analysis_first_uip(&self, clause_index: ClauseIndex) -> Clause {
-        let mut clause = self.clauses.get(&clause_index).unwrap().clone();
+    fn conflict_analysis_first_uip(&mut self, clause_index: ClauseIndex) -> Clause {
+        // iterate decision stack
+        // replace the literal in the clause with the literals in antecedent
+        // stop when there is only 1 literal at decision level in the clause
 
         let latest_decision_level = *self.decision_levels.last().unwrap();
-
-        let mut visited_list = vec![];
+        let mut clause = self
+            .clauses
+            .get(&clause_index)
+            .unwrap()
+            .literals
+            .iter()
+            .filter(|&l| self.variable_decision_levels[l.handle] != Some(0))
+            .copied()
+            .collect::<Vec<_>>();
+        for literal in clause.iter() {
+            if self.variable_decision_levels[literal.handle].is_none() {
+                self.print_clause(&Clause::new(clause.clone()));
+                unreachable!("unassigned variable in clause");
+            }
+            self.visited[literal.handle] = true;
+        }
 
         for va in self.decisions.iter() {
-            if visited_list.contains(&va.handle) {
+            if clause
+                .iter()
+                .filter(|&l| self.variable_decision_levels[l.handle] == Some(latest_decision_level))
+                .count()
+                == 1
+            {
+                self.visited = vec![false; self.variables.len()];
+                return Clause::new(clause);
+            }
+
+            if clause.iter().filter(|&l| l.handle == va.handle).count() == 0 {
+                self.visited[va.handle] = true;
                 continue;
             }
-            visited_list.push(va.handle);
-            if self.decision_level_count(&clause, latest_decision_level) == 1 {
-                return clause;
-            }
-
             match self.antecedents[va.handle] {
-                None => (),
-                Some(slot_key) => {
-                    let antecedent = &mut self.clauses.get(&slot_key).unwrap();
-
-                    if antecedent
-                        .iter()
-                        .filter(|&l| {
-                            self.variable_decision_levels[l.handle] == Some(latest_decision_level)
-                                && self.antecedents[l.handle].is_some()
-                        })
-                        .count()
-                        == 0
-                    {
-                        continue;
+                None => {
+                    if self.variable_decision_levels[va.handle] == Some(latest_decision_level) {
+                        println!(
+                            "latest_decision_level {} literal {}",
+                            latest_decision_level, va.handle
+                        );
+                        self.print_clause(&Clause::new(clause.clone()));
                     }
+                    unreachable!("too many decision level variables in clause")
+                }
+                Some(slot_key) => {
+                    clause = clause
+                        .iter()
+                        .filter(|&l| l.handle != va.handle)
+                        .copied()
+                        .collect();
 
-                    match resolve(&clause, antecedent) {
-                        None => {
-                            self.print_clause(&clause);
-                            println!();
-                            self.print_clause(&antecedent);
-                            unreachable!("resolving clauses lead to empty clause");
+                    let antecedent = self.clauses.get(&slot_key).unwrap();
+                    for literal in antecedent.iter() {
+                        if self.variable_decision_levels[literal.handle].is_none() {
+                            self.print_clause(&Clause::new(clause.clone()));
+                            unreachable!("unassigned variable in clause");
                         }
-                        Some(resolvent) => {
-                            if clause == resolvent {
-                                return clause;
-                            }
-                            clause = resolvent;
+                        if !self.visited[literal.handle]
+                            && self.variable_decision_levels[literal.handle] != Some(0)
+                        {
+                            clause.push(*literal);
                         }
+                        self.visited[literal.handle] = true;
                     }
                 }
             }
         }
-
-        return clause;
+        return Clause::new(vec![]); // unsat
     }
 
     fn conflict_analysis(&mut self, clause_index: ClauseIndex) -> Clause {
-        self.conflict_analysis_last_uip(clause_index)
+        self.conflict_analysis_first_uip(clause_index)
     }
 
     fn learn_clause(&mut self, learned_clause: Clause) {
@@ -783,6 +793,11 @@ impl Solver {
 
         self.watched_literals.insert(watched_literals);
 
+        if self.clause_length(&learned_clause) != 1 {
+            println!("Learned clause: ");
+            self.print_clause(&learned_clause);
+            unreachable!("non unit learned clause");
+        }
         let slot_key = self.clauses.insert(learned_clause);
         for literal in self.clauses.get(&slot_key).unwrap().iter() {
             if literal.polarity {
@@ -901,6 +916,9 @@ impl Solver {
                         Ok(_) => (),
                         Err(slot_key) => {
                             let learned_clause = self.conflict_analysis(slot_key);
+                            if learned_clause.len() == 0 {
+                                return Solution::UnSat;
+                            }
 
                             let decision_level = if learned_clause.literals.len() == 1 {
                                 0
