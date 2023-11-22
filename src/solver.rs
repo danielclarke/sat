@@ -394,14 +394,12 @@ impl Solver {
                 continue;
             }
 
-            if cfg!(debug_assertions) {
-                if clause_length == 1 {
-                    match self.eval_clause(clause) {
-                        // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
-                        Value::True => continue,
-                        Value::False => unreachable!("False clause not earlier caught"),
-                        Value::Unknown => unreachable!("Unit clause not earlier caught"),
-                    }
+            if cfg!(debug_assertions) && clause_length == 1 {
+                match self.eval_clause(clause) {
+                    // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                    Value::True => continue,
+                    Value::False => unreachable!("False clause not earlier caught"),
+                    Value::Unknown => unreachable!("Unit clause not earlier caught"),
                 }
             }
 

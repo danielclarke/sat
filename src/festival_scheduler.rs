@@ -1,13 +1,60 @@
-use crate::solver::{self, Solution, Value, Variable};
+use crate::{
+    solver::{self, Solution, Value, Variable},
+    utils::read_lines,
+};
 use std::collections::HashMap;
+use std::path::Path;
+use std::{error, fmt};
+
+#[derive(Debug, Clone)]
+pub enum DataError {
+    EmptyFile,
+}
+
+impl fmt::Display for DataError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            DataError::EmptyFile => write!(f, "Empty file"),
+        }
+    }
+}
+
+impl error::Error for DataError {}
 
 // struct Artist {
 //     name: String,
 // }
 
-// struct Venue {
-//     name: String,
-// }
+pub struct SVenue {
+    id: usize,
+    name: String,
+    capacity: usize,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct VenueRecord {
+    name: String,
+    capacity: usize,
+}
+
+pub fn load_venues<P>(path: P) -> Result<Vec<SVenue>, Box<dyn error::Error>>
+where
+    P: AsRef<Path>,
+{
+    let mut venues = vec![];
+    let mut reader = csv::Reader::from_path(path)?;
+    for result in reader.deserialize() {
+        let record: VenueRecord = result?;
+
+        venues.push(SVenue {
+            id: venues.len(),
+            name: record.name,
+            capacity: record.capacity,
+        })
+    }
+
+    Ok(venues)
+}
 
 struct Event {
     id: usize,

@@ -13,10 +13,12 @@ mod solver;
 mod sudoku;
 
 fn main() {
+    festival_scheduler::load_venues("./_data/venues.csv");
+
     let mut scheduler = Scheduler::new();
     scheduler.solve();
 
-    let lines = if let Ok(lines) = read_lines("data/sudoku/95_hard_sudokus.txt") {
+    let lines = if let Ok(lines) = read_lines("example_data/sudoku/95_hard_sudokus.txt") {
         lines
     } else {
         return;
@@ -40,30 +42,33 @@ fn main() {
         }
     }
 
-    let lock_sheet = master_key::LockSheet::load("data/mk2/lock_sheet.txt").expect("Error:");
+    let lock_sheet =
+        master_key::LockSheet::load("example_data/mk2/lock_sheet.txt").expect("Error:");
     println!("{}", lock_sheet);
-    let geometry = master_key::Geometry::load("data/mk2/geometry.txt").expect("Error:");
+    let geometry = master_key::Geometry::load("example_data/mk2/geometry.txt").expect("Error:");
     println!("{}", geometry);
     let mut solver = master_key::Solver::new(geometry, lock_sheet);
     solver.solve();
 
-    let lock_sheet = master_key::LockSheet::load("data/mk2/lock_sheet.txt").expect("Error:");
+    let lock_sheet =
+        master_key::LockSheet::load("example_data/mk2/lock_sheet.txt").expect("Error:");
     println!("{}", lock_sheet);
-    let geometry = master_key::Geometry::load("data/mk2/geometry.txt").expect("Error:");
+    let geometry = master_key::Geometry::load("example_data/mk2/geometry.txt").expect("Error:");
     println!("{}", geometry);
     let mut solver = master_key::Solver::new(geometry, lock_sheet);
     solver.solve();
 
-    let lock_sheet = master_key::LockSheet::load("data/mk1/lock_sheet.txt").expect("Error:");
+    let lock_sheet =
+        master_key::LockSheet::load("example_data/mk1/lock_sheet.txt").expect("Error:");
     println!("{}", lock_sheet);
-    let geometry = master_key::Geometry::load("data/mk1/geometry.txt").expect("Error:");
+    let geometry = master_key::Geometry::load("example_data/mk1/geometry.txt").expect("Error:");
     println!("{}", geometry);
     let mut solver = master_key::Solver::new(geometry, lock_sheet);
     solver.solve();
 
-    // let lock_sheet = master_key::LockSheet::load("data/mk1/lock_sheet.txt").expect("Error:");
+    // let lock_sheet = master_key::LockSheet::load("example_data/mk1/lock_sheet.txt").expect("Error:");
     // println!("{}", lock_sheet);
-    // let geometry = master_key::Geometry::load("data/mk1/geometry.txt").expect("Error:");
+    // let geometry = master_key::Geometry::load("example_data/mk1/geometry.txt").expect("Error:");
     // println!("{}", geometry);
     // let mut solver = master_key::Solver::new(geometry, lock_sheet);
     // solver.solve();
