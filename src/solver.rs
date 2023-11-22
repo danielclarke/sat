@@ -123,8 +123,8 @@ impl Clause {
         self.literals.dedup();
     }
 
-    fn empty(&self) -> bool {
-        self.literals.len() == 0
+    fn is_empty(&self) -> bool {
+        self.literals.is_empty()
     }
 
     fn len(&self) -> usize {
@@ -360,15 +360,17 @@ impl Solver {
                 unreachable!("non unit clause in unit stack");
             }
 
-            match self.eval_clause(self.clauses.get(&slot_key).unwrap()) {
-                // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
-                Value::True => continue,
-                Value::False => {
-                    println!("Num unit clauses {}", self.unit_clauses.len());
-                    self.print_clause(self.clauses.get(&slot_key).unwrap());
-                    unreachable!("False unit clause not earlier caught");
+            if cfg!(debug_assertions) {
+                match self.eval_clause(self.clauses.get(&slot_key).unwrap()) {
+                    // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                    Value::True => continue,
+                    Value::False => {
+                        println!("Num unit clauses {}", self.unit_clauses.len());
+                        self.print_clause(self.clauses.get(&slot_key).unwrap());
+                        unreachable!("False unit clause not earlier caught");
+                    }
+                    Value::Unknown => (),
                 }
-                Value::Unknown => (),
             }
 
             for literal in self.clauses.get(&slot_key).unwrap().iter() {
@@ -392,12 +394,14 @@ impl Solver {
                 continue;
             }
 
-            if clause_length == 1 {
-                match self.eval_clause(clause) {
-                    // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
-                    Value::True => continue,
-                    Value::False => unreachable!("False clause not earlier caught"),
-                    Value::Unknown => unreachable!("Unit clause not earlier caught"),
+            if cfg!(debug_assertions) {
+                if clause_length == 1 {
+                    match self.eval_clause(clause) {
+                        // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
+                        Value::True => continue,
+                        Value::False => unreachable!("False clause not earlier caught"),
+                        Value::Unknown => unreachable!("Unit clause not earlier caught"),
+                    }
                 }
             }
 
@@ -555,9 +559,7 @@ impl Solver {
                         }
                     }
                     1 => {
-                        if self.eval_clause(clause) == Value::Unknown {
-                            self.unit_clauses.push(slot_key);
-                        }
+                        self.unit_clauses.push(slot_key);
                     }
                     _ => {
                         for &l in clause.iter() {
@@ -749,11 +751,7 @@ impl Solver {
                     unreachable!("too many decision level variables in clause")
                 }
                 Some(slot_key) => {
-                    clause = clause
-                        .iter()
-                        .filter(|&l| l.handle != va.handle)
-                        .copied()
-                        .collect();
+                    clause.retain(|&l| l.handle != va.handle);
 
                     let antecedent = self.clauses.get(&slot_key).unwrap();
                     for literal in antecedent.iter() {
@@ -771,7 +769,7 @@ impl Solver {
                 }
             }
         }
-        return Clause::new(vec![]); // unsat
+        Clause::new(vec![]) // unsat
     }
 
     fn conflict_analysis(&mut self, clause_index: ClauseIndex) -> Clause {
@@ -881,14 +879,16 @@ impl Solver {
             Err(_) => return Solution::UnSat,
         }
 
-        for clause in self.clauses.iter() {
-            if self.clause_length(clause) == 1 {
-                match self.eval_clause(clause) {
-                    Value::True => (),
-                    Value::Unknown => (),
-                    Value::False => {
-                        self.print_clause(clause);
-                        unreachable!("Unit clause not found during unit propagation");
+        if cfg!(debug_assertions) {
+            for clause in self.clauses.iter() {
+                if self.clause_length(clause) == 1 {
+                    match self.eval_clause(clause) {
+                        Value::True => (),
+                        Value::Unknown => (),
+                        Value::False => {
+                            self.print_clause(clause);
+                            unreachable!("Unit clause not found during unit propagation");
+                        }
                     }
                 }
             }
@@ -922,7 +922,7 @@ impl Solver {
                         Ok(_) => (),
                         Err(slot_key) => {
                             let learned_clause = self.conflict_analysis(slot_key);
-                            if learned_clause.len() == 0 {
+                            if learned_clause.is_empty() {
                                 return Solution::UnSat;
                             }
 
@@ -932,8 +932,7 @@ impl Solver {
                                 let mut decision_levels = learned_clause
                                     .literals
                                     .iter()
-                                    .map(|&l| self.variable_decision_levels[l.handle])
-                                    .flatten()
+                                    .filter_map(|&l| self.variable_decision_levels[l.handle])
                                     .collect::<Vec<_>>();
                                 decision_levels.sort();
                                 decision_levels.dedup();
