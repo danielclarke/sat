@@ -13,9 +13,14 @@ mod solver;
 mod sudoku;
 
 fn main() {
-    festival_scheduler::load_venues("./_data/venues.csv");
+    let venues =
+        festival_scheduler::load_venues("./data/venues.csv").expect("error reading venues");
+    let events =
+        festival_scheduler::load_events("./data/sessions.csv").expect("error reading events");
+    let artists =
+        festival_scheduler::load_artists("./data/sessions.csv").expect("error reading artists");
 
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = Scheduler::new(0, 2, artists, venues, events[0..10].to_vec());
     scheduler.solve();
 
     let lines = if let Ok(lines) = read_lines("example_data/sudoku/95_hard_sudokus.txt") {

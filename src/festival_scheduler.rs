@@ -21,11 +21,49 @@ impl fmt::Display for DataError {
 
 impl error::Error for DataError {}
 
-// struct Artist {
-//     name: String,
-// }
+#[derive(Debug)]
+pub struct Artist {
+    id: usize,
+    name: String,
+}
 
-pub struct SVenue {
+pub fn load_artists<P>(path: P) -> Result<Vec<Artist>, Box<dyn error::Error>>
+where
+    P: AsRef<Path>,
+{
+    let mut artist_names = vec![];
+    let mut reader = csv::Reader::from_path(path)?;
+    for result in reader.deserialize() {
+        let EventRecord {
+            session_title: _,
+            session_chair,
+            participants,
+        } = result?;
+        artist_names.append(
+            &mut participants
+                .split('\n')
+                .map(|s| s.trim().to_owned())
+                .collect::<Vec<_>>(),
+        );
+        if let Some(session_chair) = session_chair {
+            artist_names.push(session_chair)
+        }
+    }
+
+    artist_names.sort();
+    artist_names.dedup();
+    let mut artists = vec![];
+    for artist_name in artist_names {
+        artists.push(Artist {
+            id: artists.len(),
+            name: artist_name,
+        });
+    }
+
+    Ok(artists)
+}
+
+pub struct Venue {
     id: usize,
     name: String,
     capacity: usize,
@@ -37,23 +75,71 @@ struct VenueRecord {
     capacity: usize,
 }
 
-pub fn load_venues<P>(path: P) -> Result<Vec<SVenue>, Box<dyn error::Error>>
+pub fn load_venues<P>(path: P) -> Result<Vec<Venue>, Box<dyn error::Error>>
 where
     P: AsRef<Path>,
 {
     let mut venues = vec![];
     let mut reader = csv::Reader::from_path(path)?;
     for result in reader.deserialize() {
-        let record: VenueRecord = result?;
+        let VenueRecord { name, capacity } = result?;
 
-        venues.push(SVenue {
+        venues.push(Venue {
             id: venues.len(),
-            name: record.name,
-            capacity: record.capacity,
+            name,
+            capacity,
         })
     }
 
     Ok(venues)
+}
+
+#[derive(Debug, Clone)]
+pub struct SEvent {
+    id: usize,
+    name: String,
+    artists: Vec<String>,
+    duration: usize,
+    capacity: usize,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EventRecord {
+    session_title: String,
+    session_chair: Option<String>,
+    participants: String,
+}
+
+pub fn load_events<P>(path: P) -> Result<Vec<SEvent>, Box<dyn error::Error>>
+where
+    P: AsRef<Path>,
+{
+    let mut events = vec![];
+    let mut reader = csv::Reader::from_path(path)?;
+    for result in reader.deserialize() {
+        let EventRecord {
+            session_title,
+            session_chair,
+            participants,
+        } = result?;
+        let mut artists = participants
+            .split('\n')
+            .map(|s| s.trim().to_owned())
+            .collect::<Vec<_>>();
+        if let Some(session_chair) = session_chair {
+            artists.push(session_chair)
+        }
+
+        events.push(SEvent {
+            id: events.len(),
+            name: session_title,
+            artists,
+            duration: 1,
+            capacity: 100,
+        })
+    }
+
+    Ok(events)
 }
 
 struct Event {
@@ -73,39 +159,52 @@ impl Event {
 }
 
 type Interval = usize;
-type Artist = usize;
-type Venue = usize;
-type ArtistIndex = (Interval, Venue, Artist);
-type EventIndex = (Interval, Venue, usize);
+type ArtistIndex = usize;
+type VenueIndex = usize;
+type ArtistVariableIndex = (Interval, VenueIndex, ArtistIndex);
+type EventVariableIndex = (Interval, VenueIndex, usize);
 
 pub struct Scheduler {
     start: usize,
     end: usize,
-    artists: Vec<String>,
-    venues: Vec<String>,
+    artists: Vec<Artist>,
+    venues: Vec<Venue>,
     events: Vec<Event>,
     formula: solver::Formula,
-    artist_vars: HashMap<ArtistIndex, Variable>,
-    event_vars: HashMap<EventIndex, Variable>,
+    artist_vars: HashMap<ArtistVariableIndex, Variable>,
+    event_vars: HashMap<EventVariableIndex, Variable>,
 }
 
 impl Scheduler {
-    pub fn new() -> Self {
+    pub fn new(
+        start: usize,
+        end: usize,
+        artists: Vec<Artist>,
+        venues: Vec<Venue>,
+        events: Vec<SEvent>,
+    ) -> Self {
+        let mut events_ = vec![];
+        for event in events.iter() {
+            let artist_ids = event
+                .artists
+                .iter()
+                .map(|artist_name| {
+                    artists
+                        .iter()
+                        .find(|&artist| artist.name == *artist_name)
+                        .unwrap()
+                        .id
+                })
+                .collect::<Vec<_>>();
+            events_.push(Event::new(event.id, artist_ids, event.duration));
+        }
+
         Self {
-            start: 0,
-            end: 2,
-            artists: vec![
-                String::from("a"),
-                String::from("b"),
-                String::from("c"),
-                String::from("d"),
-            ],
-            venues: vec![String::from("v1"), String::from("v2")],
-            events: vec![
-                Event::new(0, vec![0, 1, 2], 8),
-                Event::new(1, vec![2, 3], 8),
-                Event::new(2, vec![0, 1], 8),
-            ],
+            start,
+            end,
+            artists,
+            venues,
+            events: events_,
             formula: solver::Formula::new(),
             artist_vars: HashMap::new(),
             event_vars: HashMap::new(),
@@ -115,7 +214,12 @@ impl Scheduler {
     // scheduler logic
 
     // variables
-    fn add_artist_var(&mut self, interval: usize, venue: Venue, artist: Artist) -> Variable {
+    fn add_artist_var(
+        &mut self,
+        interval: usize,
+        venue: VenueIndex,
+        artist: ArtistIndex,
+    ) -> Variable {
         let index = (interval, venue, artist);
         *self
             .artist_vars
@@ -123,7 +227,7 @@ impl Scheduler {
             .or_insert(self.formula.add_var())
     }
 
-    fn add_event_var(&mut self, interval: usize, venue: Venue, event: usize) -> Variable {
+    fn add_event_var(&mut self, interval: usize, venue: VenueIndex, event: usize) -> Variable {
         let index = (interval, venue, event);
         *self
             .event_vars
@@ -131,17 +235,17 @@ impl Scheduler {
             .or_insert(self.formula.add_var())
     }
 
-    fn artist_var(&mut self, interval: usize, venue: Venue, artist: Artist) -> Variable {
+    fn artist_var(&mut self, interval: usize, venue: VenueIndex, artist: ArtistIndex) -> Variable {
         let index = (interval, venue, artist);
         self.artist_vars[&index]
     }
 
-    fn event_var(&mut self, interval: usize, venue: Venue, event: usize) -> Variable {
+    fn event_var(&mut self, interval: usize, venue: VenueIndex, event: usize) -> Variable {
         let index = (interval, venue, event);
         self.event_vars[&index]
     }
 
-    fn add_artist(&mut self, artist: Artist) {
+    fn add_artist(&mut self, artist: ArtistIndex) {
         for interval in self.start..self.end {
             for venue in 0..self.venues.len() {
                 self.add_artist_var(interval, venue, artist);
@@ -192,7 +296,7 @@ impl Scheduler {
         }
     }
 
-    fn artist_one_place_at_a_time(&mut self, artist: Artist) {
+    fn artist_one_place_at_a_time(&mut self, artist: ArtistIndex) {
         for interval in self.start..self.end {
             let variables = (0..self.venues.len())
                 .map(|venue| self.artist_var(interval, venue, artist))

@@ -901,10 +901,11 @@ impl Solver {
             i += 1;
             if i % 100_000 == 0 {
                 println!(
-                    "{}: Vars: {} / {} DL: {:#?}",
+                    "{}: Vars: {} / {} Clauses: {} DL: {:#?}",
                     i,
                     self.variables.len() - self.decisions.len(),
                     self.variables.len(),
+                    self.clauses.len(),
                     self.decision_levels.last()
                 );
             }
