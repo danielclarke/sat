@@ -95,7 +95,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct SEvent {
+pub struct Event {
     id: usize,
     name: String,
     artists: Vec<String>,
@@ -110,7 +110,7 @@ struct EventRecord {
     participants: String,
 }
 
-pub fn load_events<P>(path: P) -> Result<Vec<SEvent>, Box<dyn error::Error>>
+pub fn load_events<P>(path: P) -> Result<Vec<Event>, Box<dyn error::Error>>
 where
     P: AsRef<Path>,
 {
@@ -130,7 +130,7 @@ where
             artists.push(session_chair)
         }
 
-        events.push(SEvent {
+        events.push(Event {
             id: events.len(),
             name: session_title,
             artists,
@@ -142,13 +142,13 @@ where
     Ok(events)
 }
 
-struct Event {
+struct EventRep {
     id: usize,
     artists: Vec<usize>,
     duration: usize,
 }
 
-impl Event {
+impl EventRep {
     fn new(id: usize, artists: Vec<usize>, duration: usize) -> Self {
         Self {
             id,
@@ -170,6 +170,7 @@ pub struct Scheduler {
     artists: Vec<Artist>,
     venues: Vec<Venue>,
     events: Vec<Event>,
+    event_reps: Vec<EventRep>,
     formula: solver::Formula,
     artist_vars: HashMap<ArtistVariableIndex, Variable>,
     event_vars: HashMap<EventVariableIndex, Variable>,
@@ -181,7 +182,7 @@ impl Scheduler {
         end: usize,
         artists: Vec<Artist>,
         venues: Vec<Venue>,
-        events: Vec<SEvent>,
+        events: Vec<Event>,
     ) -> Self {
         let mut events_ = vec![];
         for event in events.iter() {
@@ -196,7 +197,7 @@ impl Scheduler {
                         .id
                 })
                 .collect::<Vec<_>>();
-            events_.push(Event::new(event.id, artist_ids, event.duration));
+            events_.push(EventRep::new(event.id, artist_ids, event.duration));
         }
 
         Self {
@@ -204,7 +205,8 @@ impl Scheduler {
             end,
             artists,
             venues,
-            events: events_,
+            events,
+            event_reps: events_,
             formula: solver::Formula::new(),
             artist_vars: HashMap::new(),
             event_vars: HashMap::new(),
@@ -275,7 +277,7 @@ impl Scheduler {
     fn one_event_per_venue_interval(&mut self) {
         for interval in self.start..self.end {
             for venue in 0..self.venues.len() {
-                let variables = (0..self.events.len())
+                let variables = (0..self.event_reps.len())
                     .map(|event| self.event_var(interval, venue, event))
                     .collect();
                 self.zero_or_one(variables);
@@ -286,7 +288,7 @@ impl Scheduler {
     fn artists_attend_events(&mut self, event: usize) {
         for interval in self.start..self.end {
             for venue in 0..self.venues.len() {
-                for artist in self.events[event].artists.clone() {
+                for artist in self.event_reps[event].artists.clone() {
                     let artist_lit = self.artist_var(interval, venue, artist);
                     let event_lit = self.event_var(interval, venue, event);
                     self.formula
@@ -312,7 +314,7 @@ impl Scheduler {
             self.artist_one_place_at_a_time(artist);
         }
 
-        for event in 0..self.events.len() {
+        for event in 0..self.event_reps.len() {
             self.add_event(event);
             self.artists_attend_events(event);
             self.event_must_run(event);
@@ -328,13 +330,13 @@ impl Scheduler {
 
                 for interval in self.start..self.end {
                     for venue in 0..self.venues.len() {
-                        for event in self.events.iter() {
-                            let indices = (interval, venue, event.id);
+                        for event in 0..self.event_reps.len() {
+                            let indices = (interval, venue, event);
                             let event_lit = self.event_vars[&indices];
                             match solver.value(&event_lit) {
                                 Value::True => println!(
-                                    "event: {} interval: {} venue: {}",
-                                    event.id, interval, venue
+                                    "event: {} venue: {} interval: {}",
+                                    self.events[event].name, self.venues[venue].name, interval
                                 ),
                                 Value::Unknown => (),
                                 Value::False => (),
@@ -345,8 +347,8 @@ impl Scheduler {
                             let artist_lit = self.artist_vars[&indices];
                             match solver.value(&artist_lit) {
                                 Value::True => println!(
-                                    "artist: {} interval: {} venue: {}",
-                                    artist, interval, venue
+                                    "artist: {} venue: {} interval: {}",
+                                    self.artists[artist].name, self.venues[venue].name, interval
                                 ),
                                 Value::Unknown => (),
                                 Value::False => (),
