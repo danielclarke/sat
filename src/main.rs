@@ -20,7 +20,7 @@ fn main() {
     let artists =
         festival_scheduler::load_artists("./data/sessions.csv").expect("error reading artists");
 
-    let mut scheduler = Scheduler::new(0, 2, artists, venues, events[0..10].to_vec());
+    let mut scheduler = Scheduler::new(0, 5, artists, venues, events[0..20].to_vec());
     scheduler.solve();
 
     let lines = if let Ok(lines) = read_lines("example_data/sudoku/95_hard_sudokus.txt") {

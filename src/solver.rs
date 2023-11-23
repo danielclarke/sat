@@ -271,6 +271,11 @@ pub struct Solver {
     variable_decision_levels: Vec<Option<DecisionLevel>>,
     antecedents: Vec<Antecedant>,
 
+    // branching heuristic
+    decay_factor: f32,
+    conflict_learn_rate: f32,
+    variable_branching_scores: Vec<f32>,
+
     // implication_vertices:
     watched_literals: SlotMap<[Literal; 2]>,
     unit_clauses: FixedSizeStack<ClauseIndex>,
@@ -336,6 +341,9 @@ impl Solver {
             decision_levels,
             values,
             variable_decision_levels,
+            decay_factor: 0.95,
+            conflict_learn_rate: 1.0,
+            variable_branching_scores: vec![0.0; num_variables],
             antecedents,
             watched_literals,
             unit_clauses,
@@ -385,93 +393,27 @@ impl Solver {
             }
         }
 
-        let (mut decision_literal, mut min_clause_length) = (None, None);
-        for (_, clause) in self.clauses.iter().items() {
-            // unit clause propagation
-            let clause_length = self.clause_length(clause);
-
-            if clause_length == 0 {
+        let mut decision_variable_handle = None;
+        let mut max_score = 0.0;
+        for (handle, &score) in self.variable_branching_scores.iter().enumerate() {
+            if self.values[handle] != Value::Unknown {
                 continue;
             }
-
-            if cfg!(debug_assertions) && clause_length == 1 {
-                match self.eval_clause(clause) {
-                    // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
-                    Value::True => continue,
-                    Value::False => unreachable!("False clause not earlier caught"),
-                    Value::Unknown => unreachable!("Unit clause not earlier caught"),
-                }
-            }
-
-            // cache the smallest clause encountered
-            match (decision_literal, min_clause_length) {
-                (None, None) => {
-                    for literal in clause.iter() {
-                        if literal.value(self.values[literal.handle]) == Value::Unknown {
-                            (decision_literal, min_clause_length) =
-                                (Some(*literal), Some(clause_length));
-                            break;
-                        }
-                    }
-                }
-                (Some(_), Some(min_clause_length_)) => {
-                    if clause_length < min_clause_length_ {
-                        for literal in clause.iter() {
-                            if literal.value(self.values[literal.handle]) == Value::Unknown {
-                                (decision_literal, min_clause_length) =
-                                    (Some(*literal), Some(clause_length));
-                                break;
-                            }
-                        }
-                    }
-                }
-                (_, _) => unreachable!(),
+            if decision_variable_handle.is_none() {
+                decision_variable_handle = Some(handle);
+                max_score = score;
+            } else if score > max_score {
+                decision_variable_handle = Some(handle);
+                max_score = score;
             }
         }
 
-        // pure literal elimination
-        for (v, clauses) in self.variable_clauses.iter().enumerate() {
-            'next_variable: {
-                if self.values[v] == Value::Unknown {
-                    let mut polarity = None;
-                    for &clause in clauses.iter() {
-                        if self.eval_clause(self.clauses.get(&clause).unwrap()) == Value::Unknown {
-                            for literal in self.clauses.get(&clause).unwrap().iter() {
-                                if literal.handle == v {
-                                    match polarity {
-                                        None => polarity = Some(literal.polarity),
-                                        Some(polarity) => {
-                                            if polarity == literal.polarity {
-                                                continue;
-                                            } else {
-                                                break 'next_variable;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    match polarity {
-                        None => (),
-                        Some(polarity) => {
-                            return Some((
-                                self.decision_levels.last().map_or(0, |&dl| dl + 1),
-                                VariableAssignment::new(v, polarity),
-                            ));
-                        }
-                    }
-                };
-            }
-        }
-
-        // smallest clause
-        decision_literal.map(|literal| {
+        return decision_variable_handle.map(|decision_variable_handle| {
             (
                 self.decision_levels.last().map_or(0, |&dl| dl + 1),
-                VariableAssignment::new(literal.handle, literal.polarity),
+                VariableAssignment::new(decision_variable_handle, true),
             )
-        })
+        });
     }
 
     fn clause_length(&self, clause: &Clause) -> usize {
@@ -771,6 +713,13 @@ impl Solver {
     }
 
     fn conflict_analysis(&mut self, clause_index: ClauseIndex) -> Clause {
+        for score in self.variable_branching_scores.iter_mut() {
+            *score *= self.decay_factor;
+        }
+        for literal in self.clauses.get(&clause_index).unwrap().iter() {
+            self.variable_branching_scores[literal.handle] += self.conflict_learn_rate;
+        }
+
         self.conflict_analysis_first_uip(clause_index)
     }
 
