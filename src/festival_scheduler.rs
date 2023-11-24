@@ -127,7 +127,12 @@ where
             .map(|s| s.trim().to_owned())
             .collect::<Vec<_>>();
         if let Some(session_chair) = session_chair {
-            artists.push(session_chair)
+            artists.append(
+                &mut session_chair
+                    .split('\n')
+                    .map(|s| s.trim().to_owned())
+                    .collect::<Vec<_>>(),
+            );
         }
 
         events.push(Event {
@@ -184,6 +189,14 @@ impl Scheduler {
         venues: Vec<Venue>,
         events: Vec<Event>,
     ) -> Self {
+        // let mut event_artists = events.iter().map(|e| e.artists.clone()).flatten().collect::<Vec<_>>();
+        // event_artists.sort();
+        // event_artists.dedup();
+        // let mut artists = artists;
+        // artists.retain(|a| event_artists.contains(&a.name));
+
+        // println!("{:?}", artists.iter().map(|a| a.name.clone()).collect::<Vec<_>>());
+
         let mut events_ = vec![];
         for event in events.iter() {
             let artist_ids = event
@@ -334,22 +347,29 @@ impl Scheduler {
                             let indices = (interval, venue, event);
                             let event_lit = self.event_vars[&indices];
                             match solver.value(&event_lit) {
-                                Value::True => println!(
-                                    "event: {} venue: {} interval: {}",
-                                    self.events[event].name, self.venues[venue].name, interval
-                                ),
-                                Value::Unknown => (),
-                                Value::False => (),
-                            }
-                        }
-                        for artist in 0..self.artists.len() {
-                            let indices = (interval, venue, artist);
-                            let artist_lit = self.artist_vars[&indices];
-                            match solver.value(&artist_lit) {
-                                Value::True => println!(
-                                    "artist: {} venue: {} interval: {}",
-                                    self.artists[artist].name, self.venues[venue].name, interval
-                                ),
+                                Value::True => {
+                                    println!(
+                                        "event: {} venue: {} interval: {}",
+                                        self.events[event].name, self.venues[venue].name, interval
+                                    );
+                                    for artist in 0..self.artists.len() {
+                                        if self.event_reps[event].artists.contains(&artist) {
+                                            let indices = (interval, venue, artist);
+                                            let artist_lit = self.artist_vars[&indices];
+                                            match solver.value(&artist_lit) {
+                                                Value::True => println!(
+                                                    "artist: {} venue: {} interval: {}",
+                                                    self.artists[artist].name,
+                                                    self.venues[venue].name,
+                                                    interval
+                                                ),
+                                                Value::Unknown => (),
+                                                Value::False => (),
+                                            }
+                                        }
+                                    }
+                                }
+
                                 Value::Unknown => (),
                                 Value::False => (),
                             }
