@@ -363,12 +363,11 @@ impl Solver {
         //   3. smallest clause
 
         while let Some(slot_key) = self.unit_clauses.pop() {
-            if self.clause_length(self.clauses.get(&slot_key).unwrap()) > 1 {
-                self.print_clause(self.clauses.get(&slot_key).unwrap());
-                unreachable!("non unit clause in unit stack");
-            }
-
             if cfg!(debug_assertions) {
+                if self.clause_length(self.clauses.get(&slot_key).unwrap()) > 1 {
+                    self.print_clause(self.clauses.get(&slot_key).unwrap());
+                    unreachable!("non unit clause in unit stack");
+                }
                 match self.eval_clause(self.clauses.get(&slot_key).unwrap()) {
                     // need to continue to avoid "false positive" unit clause which incorrectly triggers a DL backtrack
                     Value::True => continue,
@@ -399,21 +398,18 @@ impl Solver {
             if self.values[handle] != Value::Unknown {
                 continue;
             }
-            if decision_variable_handle.is_none() {
-                decision_variable_handle = Some(handle);
-                max_score = score;
-            } else if score > max_score {
+            if decision_variable_handle.is_none() || max_score < score {
                 decision_variable_handle = Some(handle);
                 max_score = score;
             }
         }
 
-        return decision_variable_handle.map(|decision_variable_handle| {
+        decision_variable_handle.map(|decision_variable_handle| {
             (
                 self.decision_levels.last().map_or(0, |&dl| dl + 1),
                 VariableAssignment::new(decision_variable_handle, true),
             )
-        });
+        })
     }
 
     fn clause_length(&self, clause: &Clause) -> usize {
@@ -427,6 +423,19 @@ impl Solver {
         }
 
         count
+    }
+
+    fn clause_length_and_value(&self, clause: &Clause) -> (usize, Value) {
+        let mut count = 0;
+        for literal in clause.iter() {
+            match literal.value(self.values[literal.handle]) {
+                Value::True => return (0, Value::True),
+                Value::False => (),
+                Value::Unknown => count += 1,
+            }
+        }
+
+        (count, if count == 0 {Value::False} else {Value::Unknown}) 
     }
 
     fn eval_clause(&self, clause: &Clause) -> Value {
@@ -481,31 +490,30 @@ impl Solver {
 
             // iterate watching clauses and reassign the watched literal to an unset one
             for &slot_key in false_literal_clauses.iter() {
-                let watched_literal_index =
-                    if va.handle == self.watched_literals.get(&slot_key).unwrap()[0].handle {
-                        0
-                    } else if va.handle == self.watched_literals.get(&slot_key).unwrap()[1].handle {
-                        1
-                    } else {
-                        continue;
-                    };
+                let watched_literals = self.watched_literals.get(&slot_key).unwrap();
+                let watched_literal_index = if va.handle == watched_literals[0].handle {
+                    0
+                } else if va.handle == watched_literals[1].handle {
+                    1
+                } else {
+                    continue;
+                };
 
                 let clause = self.clauses.get(&slot_key).unwrap();
 
-                match self.clause_length(clause) {
-                    0 => {
-                        if self.eval_clause(clause) == Value::False {
-                            return Err(slot_key);
-                        }
+                match self.clause_length_and_value(clause) {
+                    (0, Value::False) => {
+                        return Err(slot_key);
                     }
-                    1 => {
+                    (0, Value::True) => (),
+                    (1, _) => {
                         self.unit_clauses.push(slot_key);
                     }
                     _ => {
                         for &l in clause.iter() {
                             if self.values[l.handle] == Value::Unknown
-                                && l != self.watched_literals.get(&slot_key).unwrap()[0]
-                                && l != self.watched_literals.get(&slot_key).unwrap()[1]
+                                && l != watched_literals[0]
+                                && l != watched_literals[1]
                             {
                                 // replace the watched literal
                                 self.watched_literals.get_mut(&slot_key).unwrap()
@@ -744,10 +752,12 @@ impl Solver {
 
         self.watched_literals.insert(watched_literals);
 
-        if self.clause_length(&learned_clause) != 1 {
-            println!("Learned clause: ");
-            self.print_clause(&learned_clause);
-            unreachable!("non unit learned clause");
+        if cfg!(debug_assertions) {
+            if self.clause_length(&learned_clause) != 1 {
+                println!("Learned clause: ");
+                self.print_clause(&learned_clause);
+                unreachable!("non unit learned clause");
+            }
         }
         let slot_key = self.clauses.insert(learned_clause);
         for literal in self.clauses.get(&slot_key).unwrap().iter() {
