@@ -203,6 +203,7 @@ impl Scheduler {
                 .artists
                 .iter()
                 .map(|artist_name| {
+                    println!("artist_name {}", artist_name);
                     artists
                         .iter()
                         .find(|&artist| artist.name == *artist_name)

@@ -435,7 +435,14 @@ impl Solver {
             }
         }
 
-        (count, if count == 0 {Value::False} else {Value::Unknown}) 
+        (
+            count,
+            if count == 0 {
+                Value::False
+            } else {
+                Value::Unknown
+            },
+        )
     }
 
     fn eval_clause(&self, clause: &Clause) -> Value {
@@ -1234,7 +1241,7 @@ mod test_unit_propagation {
                 VariableAssignment {
                     handle: v2.handle,
                     index: 0,
-                    values: [Value::False, Value::True],
+                    values: [Value::True, Value::False],
                 }
             ))
         );
@@ -1279,7 +1286,7 @@ mod test_unit_propagation {
                 VariableAssignment {
                     handle: v2.handle,
                     index: 0,
-                    values: [Value::False, Value::True],
+                    values: [Value::True, Value::False],
                 }
             ))
         );

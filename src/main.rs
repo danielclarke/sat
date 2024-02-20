@@ -20,7 +20,7 @@ fn main() {
     let artists =
         festival_scheduler::load_artists("./data/sessions.csv").expect("error reading artists");
 
-    let mut scheduler = Scheduler::new(0, 5, artists, venues, events[0..20].to_vec());
+    let mut scheduler = Scheduler::new(0, 4, artists, venues, events[0..10].to_vec());
     scheduler.solve();
 
     let lines = if let Ok(lines) = read_lines("example_data/sudoku/95_hard_sudokus.txt") {
@@ -71,10 +71,11 @@ fn main() {
     let mut solver = master_key::Solver::new(geometry, lock_sheet);
     solver.solve();
 
-    // let lock_sheet = master_key::LockSheet::load("example_data/mk1/lock_sheet.txt").expect("Error:");
-    // println!("{}", lock_sheet);
-    // let geometry = master_key::Geometry::load("example_data/mk1/geometry.txt").expect("Error:");
-    // println!("{}", geometry);
-    // let mut solver = master_key::Solver::new(geometry, lock_sheet);
-    // solver.solve();
+    let lock_sheet =
+        master_key::LockSheet::load("example_data/mk1/lock_sheet.txt").expect("Error:");
+    println!("{}", lock_sheet);
+    let geometry = master_key::Geometry::load("example_data/mk1/geometry.txt").expect("Error:");
+    println!("{}", geometry);
+    let mut solver = master_key::Solver::new(geometry, lock_sheet);
+    solver.solve();
 }
