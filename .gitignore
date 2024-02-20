@@ -3,3 +3,5 @@
 flamegraph.svg
 logs
 data
+/out
+.DS_Store
