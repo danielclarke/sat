@@ -1,7 +1,6 @@
 .vscode
 /target
-flamegraph.svg
 logs
-data
+/data
 /out
 .DS_Store

@@ -250,7 +250,7 @@ mod test_sudokus {
         }
 
         println!();
-        return Ok(());
+        Ok(())
     }
 
     #[test]
